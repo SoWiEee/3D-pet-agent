@@ -14,6 +14,16 @@ export interface PetState {
 
 export type Waypoint = [number, number, number];
 
+export interface WorldObjectMarker {
+  object_id: string;
+  class_label: string;
+  center_3d_world: Waypoint;
+  extent_3d?: Waypoint;
+  median_depth?: number;
+  depth_uncertainty?: number;
+  confidence?: number;
+}
+
 export interface PetAction {
   action:
     | "move_to"
@@ -22,7 +32,8 @@ export interface PetAction {
     | "play_animation"
     | "set_emotion"
     | "ask"
-    | "state";
+    | "state"
+    | "world_update";
   target_position_3d?: Waypoint | null;
   path?: Waypoint[] | null;
   look_at_object_id?: string | null;
@@ -31,6 +42,7 @@ export interface PetAction {
   speed?: number | null;
   speech?: string | null;
   state?: PetState | null;
+  world_objects?: WorldObjectMarker[] | null;
   timestamp?: number;
 }
 

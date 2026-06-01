@@ -11,12 +11,19 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
+from .depth import DepthAnythingV2
 from .detector import GroundingDinoDetector
 from .schema import ObjectCandidate2D, PerceptionResult, mask_quality_proxy
 from .segmenter import SamSegmenter
 
 if TYPE_CHECKING:
     from ..config import AppConfig
+    from ..spatial import (
+        CameraIntrinsics,
+        ObjectLifter,
+        ObjectState3D,
+        PoseSource,
+    )
 
 log = logging.getLogger("pet_agent.perception")
 
@@ -41,7 +48,16 @@ class PerceptionPipeline:
         self.cfg = cfg
         self.detector = GroundingDinoDetector(cfg.models.detector)
         self.segmenter = SamSegmenter(cfg.models.segmenter)
+        self.depth: DepthAnythingV2 | None = None  # lazy
+        self.lifter: ObjectLifter | None = None  # lazy
         self.run_dir = run_dir or Path("runs")
+
+    def _ensure_3d(self) -> None:
+        if self.depth is None:
+            self.depth = DepthAnythingV2(self.cfg.models.depth)
+        if self.lifter is None:
+            from ..spatial import ObjectLifter as _Lifter
+            self.lifter = _Lifter()
 
     def run_frame(
         self,
@@ -85,6 +101,48 @@ class PerceptionPipeline:
             )
         return PerceptionResult(frame_id=frame_id, image_size=(h, w), objects_2d=candidates)
 
+    # ── Phase 3: 2D candidates + depth + lifting ────────────────────────────
+    def run_frame_3d(
+        self,
+        frame_bgr: np.ndarray,
+        prompts: list[str],
+        *,
+        frame_id: int = 0,
+        intrinsics: CameraIntrinsics | None = None,
+        pose_source: PoseSource | None = None,
+        save_masks: bool = True,
+    ) -> tuple[PerceptionResult, np.ndarray, list[ObjectState3D]]:
+        """Run detection + segmentation + depth + 3D lifting on one frame.
+
+        Returns ``(2d_result, depth_map, lifted_objects)``. Depth is float32
+        ``(H, W)`` in the model's native (relative) units; lifted objects use
+        the (graphics-)world frame when a pose is provided, otherwise the
+        camera frame — see ``coordinate_frame``.
+        """
+        from ..spatial import CameraIntrinsics as _CameraIntrinsics
+        from ..spatial import FixedPoseSource
+
+        self._ensure_3d()
+        assert self.depth is not None and self.lifter is not None
+
+        result = self.run_frame(frame_bgr, prompts, frame_id=frame_id, save_masks=save_masks)
+        depth = self.depth.predict(frame_bgr)
+        log.info(
+            "frame %d: depth shape=%s range=[%.3f, %.3f]",
+            frame_id, depth.shape, float(depth.min()), float(depth.max()),
+        )
+
+        intr = intrinsics or _CameraIntrinsics.from_fov(
+            image_size=result.image_size, horizontal_fov_deg=60.0
+        )
+        pose = (pose_source or FixedPoseSource()).get(frame_id)
+
+        lifted = self.lifter.lift_many(
+            result.objects_2d, depth, intr, pose, frame_id=frame_id
+        )
+        log.info("frame %d: lifted %d / %d objects", frame_id, len(lifted), len(result.objects_2d))
+        return result, depth, lifted
+
     # ── debug visualisation ─────────────────────────────────────────────────
     def visualize(self, frame_bgr: np.ndarray, result: PerceptionResult) -> np.ndarray:
         canvas = frame_bgr.copy()
@@ -106,3 +164,15 @@ class PerceptionPipeline:
                     overlay[mask > 0] = color
                     canvas = cv2.addWeighted(canvas, 1.0, overlay, 0.35, 0)
         return cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
+
+    @staticmethod
+    def colorize_depth(depth: np.ndarray) -> np.ndarray:
+        """Visualize a depth map as an inferno heatmap, RGB ndarray."""
+        d = depth.astype(np.float32)
+        d_min, d_max = float(np.nanmin(d)), float(np.nanmax(d))
+        if d_max - d_min < 1e-6:
+            d = np.zeros_like(d, dtype=np.uint8)
+        else:
+            d = ((d - d_min) / (d_max - d_min) * 255).clip(0, 255).astype(np.uint8)
+        heat_bgr = cv2.applyColorMap(d, cv2.COLORMAP_INFERNO)
+        return cv2.cvtColor(heat_bgr, cv2.COLOR_BGR2RGB)

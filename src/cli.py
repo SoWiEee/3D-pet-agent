@@ -40,6 +40,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--command", type=str)
     p.add_argument("--prompts", type=Path, help="override configs/prompts.txt")
     p.add_argument("--out", type=Path, default=Path("runs"))
+    p.add_argument(
+        "--lift",
+        action="store_true",
+        help="snapshot mode: also run depth + 3D lifting (Phase 3)",
+    )
+    p.add_argument(
+        "--fov",
+        type=float,
+        default=60.0,
+        help="estimated camera horizontal FOV in degrees (used when no intrinsics file)",
+    )
     # Demo
     p.add_argument("--camera", type=int, default=0)
     return p
@@ -105,9 +116,52 @@ def run_snapshot(args: argparse.Namespace, cfg: AppConfig) -> int:
     log.info("loaded %s (shape=%s)", args.image, frame.shape)
 
     pipeline = PerceptionPipeline(cfg)
-    result = pipeline.run_frame(frame, prompts=prompts, frame_id=0)
     args.out.mkdir(parents=True, exist_ok=True)
     out_json = args.out / f"snapshot_{args.image.stem}.json"
+
+    if args.lift:
+        from PIL import Image
+
+        from .spatial import CameraIntrinsics, FixedPoseSource
+
+        intrinsics = CameraIntrinsics.from_fov(
+            image_size=frame.shape[:2], horizontal_fov_deg=args.fov
+        )
+        result, depth, lifted = pipeline.run_frame_3d(
+            frame,
+            prompts=prompts,
+            frame_id=0,
+            intrinsics=intrinsics,
+            pose_source=FixedPoseSource(),
+        )
+        out_json.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
+        lifted_json = args.out / f"lifted_{args.image.stem}.json"
+        lifted_json.write_text(
+            json.dumps(
+                {
+                    "frame_id": 0,
+                    "image_size": list(result.image_size),
+                    "intrinsics": intrinsics.model_dump(),
+                    "objects": [o.to_dict() for o in lifted],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        log.info(
+            "wrote %s (%d objects) + %s (%d lifted)",
+            out_json, len(result.objects_2d), lifted_json, len(lifted),
+        )
+        if cfg.runtime.runtime.save_debug_outputs:
+            viz = pipeline.visualize(frame, result)
+            viz_path = args.out / f"snapshot_{args.image.stem}.png"
+            Image.fromarray(viz).save(viz_path)
+            depth_path = args.out / f"depth_{args.image.stem}.png"
+            Image.fromarray(pipeline.colorize_depth(depth)).save(depth_path)
+            log.info("wrote %s + %s", viz_path, depth_path)
+        return 0
+
+    result = pipeline.run_frame(frame, prompts=prompts, frame_id=0)
     out_json.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
     log.info("wrote %s (%d objects)", out_json, len(result.objects_2d))
     if cfg.runtime.runtime.save_debug_outputs:

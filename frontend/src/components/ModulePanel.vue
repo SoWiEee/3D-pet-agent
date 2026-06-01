@@ -42,13 +42,13 @@ defineProps<{
         <span class="phases__id">P2</span>
         <span class="phases__name">interactive perception</span>
       </li>
-      <li class="phases__item">
+      <li class="phases__item phases__item--done">
         <span class="phases__id">P3</span>
         <span class="phases__name">depth · 3d lifting</span>
       </li>
       <li class="phases__item">
         <span class="phases__id">P4</span>
-        <span class="phases__name">tracking · memory</span>
+        <span class="phases__name">tracking · semantic map</span>
       </li>
       <li class="phases__item">
         <span class="phases__id">P5</span>
@@ -57,6 +57,14 @@ defineProps<{
       <li class="phases__item">
         <span class="phases__id">P6</span>
         <span class="phases__name">command grounding</span>
+      </li>
+      <li class="phases__item">
+        <span class="phases__id">P7</span>
+        <span class="phases__name">a* path planning</span>
+      </li>
+      <li class="phases__item">
+        <span class="phases__id">P8</span>
+        <span class="phases__name">pure-pursuit control</span>
       </li>
     </ol>
   </aside>

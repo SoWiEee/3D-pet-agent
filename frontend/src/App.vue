@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { PetScene } from "./renderer/PetScene";
-import { usePetSocket, type PetAction } from "./composables/useWebSocket";
+import { usePetSocket, type PetAction, type WorldObjectMarker } from "./composables/useWebSocket";
 import StatusBar from "./components/StatusBar.vue";
 import ModulePanel from "./components/ModulePanel.vue";
 import Readouts from "./components/Readouts.vue";
@@ -14,6 +14,7 @@ let scene: PetScene | null = null;
 
 const wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/pet`;
 const { status, petState, history, lastAction, send } = usePetSocket(wsUrl);
+const worldObjects = shallowRef<WorldObjectMarker[]>([]);
 
 onMounted(() => {
   if (!viewport.value) return;
@@ -44,13 +45,22 @@ watch(lastAction, (a: PetAction | null) => {
     scene.moveTo(p.x, p.y, p.z, 5.0);
     scene.setAnimation(a.state.animation);
     scene.setEmotion(a.state.emotion);
+  } else if (a.action === "world_update" && a.world_objects) {
+    worldObjects.value = a.world_objects;
+    scene.setWorldObjects(
+      a.world_objects.map((m) => ({
+        center: m.center_3d_world,
+        label: m.class_label,
+        depth: m.median_depth,
+      })),
+    );
   }
 });
 
 const modules = computed(() => [
   { name: "detector · groundingdino", status: status.value === "open" ? "online" as const : "idle" as const, note: "open-vocab · text-conditioned" },
   { name: "segmenter · sam", status: status.value === "open" ? "online" as const : "idle" as const, note: "promptable · box → mask" },
-  { name: "depth · anything v2", status: "idle" as const, note: "wired · loads on phase 3" },
+  { name: "depth · anything v2", status: status.value === "open" ? "online" as const : "idle" as const, note: "monocular · depth-anything-v2-small" },
   { name: "tracker · iou+bytetrack", status: "off" as const, note: "phase 4" },
   { name: "scene graph", status: "off" as const, note: "phase 5" },
   { name: "command parser", status: "off" as const, note: "phase 6 · using rule fallback" },
@@ -89,7 +99,7 @@ const speechText = computed(() => petState.value?.speech ?? null);
       </div>
     </section>
 
-    <Readouts :state="petState" :history="history" />
+    <Readouts :state="petState" :history="history" :world-objects="worldObjects" />
     <CommandBar @send="onCommand" />
   </main>
 </template>

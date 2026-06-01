@@ -36,11 +36,16 @@ class DepthAnythingV2:
 
         log.info("loading Depth Anything V2 weights: %s (device=%s)", self.cfg.hf_model_id, self.device)
         self._processor = AutoImageProcessor.from_pretrained(self.cfg.hf_model_id)
-        self._model = (
-            AutoModelForDepthEstimation.from_pretrained(self.cfg.hf_model_id)
-            .to(self.device)
-            .eval()
-        )
+        model = AutoModelForDepthEstimation.from_pretrained(self.cfg.hf_model_id).eval()
+        try:
+            self._model = model.to(self.device)
+        except Exception as e:  # noqa: BLE001 — fall back gracefully on any CUDA error
+            if self.device == "cuda":
+                log.warning("CUDA unavailable for depth (%s); falling back to CPU", e)
+                self.device = "cpu"
+                self._model = model.to("cpu")
+            else:
+                raise
 
     def predict(self, frame_bgr: np.ndarray) -> np.ndarray:
         """Return a depth map (H, W) float32 in relative units."""

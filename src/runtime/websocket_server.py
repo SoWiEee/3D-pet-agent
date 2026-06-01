@@ -5,9 +5,12 @@ Endpoints
 GET  /healthz            — liveness
 GET  /pet/state          — current PetState (JSON)
 POST /pet/action         — apply a single action (testing / non-WS clients)
-POST /pet/perception     — push a perception result; current Phase 2 wires this to
-                           a placeholder behavior (move toward the highest-confidence
-                           detection). The full grounding lives in Phase 6/7.
+POST /pet/perception     — push a 2D perception result; Phase 2 placeholder
+                           moves the pet toward the highest-confidence detection.
+                           Full grounding lives in Phase 6.
+POST /perception/lifted  — push a Phase 3 lifted result (center_3d_world per object);
+                           broadcasts a ``world_update`` so the renderer drops
+                           phosphor markers at each centroid.
 WS   /ws/pet             — stream PetAction events; client may also send actions back
 """
 from __future__ import annotations
@@ -22,7 +25,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .pet_runtime import PetRuntime
+from .pet_runtime import PetAction, PetRuntime
 
 log = logging.getLogger("pet_agent.ws")
 
@@ -110,12 +113,47 @@ async def push_perception(payload: dict[str, Any]) -> dict[str, Any]:
     return {"applied": True, "target_label": label, "path_waypoints": len(path)}
 
 
+@app.post("/perception/lifted")
+async def push_lifted(payload: dict[str, Any]) -> dict[str, Any]:
+    """Accept a Phase 3 lifted JSON and broadcast ``world_update``.
+
+    Expects ``{"objects": [ObjectState3D, ...]}`` — exactly the shape the
+    snapshot CLI writes to ``runs/lifted_*.json``.
+    """
+    objects = payload.get("objects", [])
+    markers: list[dict[str, Any]] = []
+    for o in objects:
+        c3 = o.get("center_3d_world")
+        if not c3:
+            continue
+        markers.append(
+            {
+                "object_id": o.get("object_id", "obj_unknown"),
+                "class_label": o.get("class_label", "object"),
+                "center_3d_world": [float(c3[0]), float(c3[1]), float(c3[2])],
+                "extent_3d": o.get("extent_3d"),
+                "median_depth": o.get("median_depth"),
+                "depth_uncertainty": o.get("depth_uncertainty"),
+                "confidence": (o.get("confidence") or {}).get("overall"),
+            }
+        )
+
+    action = PetAction(action="world_update", world_objects=markers)
+    runtime._broadcast(action)  # noqa: SLF001 — runtime exposes this for sibling modules
+    return {"applied": True, "markers": len(markers)}
+
+
 @app.websocket("/ws/pet")
 async def ws_pet(ws: WebSocket) -> None:
     await ws.accept()
     q = runtime.subscribe()
-    # Send current state immediately.
+    # Send current state immediately, then replay the latest world_update
+    # so a freshly-opened browser sees the same scene markers as one that
+    # has been connected the whole time.
     await ws.send_text(runtime.snapshot().model_dump_json())
+    last_world = runtime.last_world_update()
+    if last_world is not None:
+        await ws.send_text(last_world.model_dump_json())
 
     async def pump_outgoing() -> None:
         try:

@@ -18,6 +18,7 @@ export class PetScene {
   renderer: THREE.WebGLRenderer;
   cat: Cat;
   targetMarker: TargetMarker;
+  worldObjects!: WorldObjectsLayer;
   private clock = new THREE.Clock();
   private tweens = new TweenGroup();
   private activeMotion:
@@ -52,6 +53,8 @@ export class PetScene {
     this.scene.add(this.cat.group);
     this.targetMarker = new TargetMarker();
     this.scene.add(this.targetMarker.group);
+    this.worldObjects = new WorldObjectsLayer();
+    this.scene.add(this.worldObjects.group);
 
     this.handleResize();
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
@@ -215,6 +218,11 @@ export class PetScene {
 
   setAnimation(name: string) {
     this.cat.setAnimation(name);
+  }
+
+  /** Phase 3: render lifted object centroids as phosphor markers. */
+  setWorldObjects(markers: { center: [number, number, number]; label: string; depth?: number }[]) {
+    this.worldObjects.update(markers);
   }
 
   // ── loop ──────────────────────────────────────────────────────────────
@@ -406,6 +414,126 @@ class Cat {
     }
     void this.emotion;
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// World objects layer — phosphor dot + thin vertical stalk + class label for
+// each lifted object centroid. Spec §6 acceptance: "debug view shows 3D
+// centroids in the Three.js scene as small dots aligned with the camera view".
+// ─────────────────────────────────────────────────────────────────────────────
+class WorldObjectsLayer {
+  group = new THREE.Group();
+  private items: THREE.Group[] = [];
+  private dotGeo = new THREE.SphereGeometry(0.025, 14, 12);
+  private dotMat = new THREE.MeshBasicMaterial({
+    color: 0x74f7d0,
+    transparent: true,
+    opacity: 0.95,
+  });
+  private stalkMat = new THREE.LineBasicMaterial({
+    color: 0x2f6757,
+    transparent: true,
+    opacity: 0.55,
+  });
+  private haloGeo = new THREE.RingGeometry(0.05, 0.06, 32);
+  private haloMat = new THREE.MeshBasicMaterial({
+    color: 0x74f7d0,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.4,
+  });
+
+  update(markers: { center: [number, number, number]; label: string; depth?: number }[]) {
+    // Reset.
+    for (const g of this.items) {
+      this.group.remove(g);
+      g.traverse((obj) => {
+        const m = (obj as THREE.Mesh).material as THREE.Material | undefined;
+        if (m && (obj as THREE.Mesh).geometry !== this.dotGeo && (obj as THREE.Mesh).geometry !== this.haloGeo) {
+          (obj as THREE.Mesh).geometry?.dispose?.();
+        }
+      });
+    }
+    this.items = [];
+
+    // Build new markers. The lifter scales relative-depth into the same
+    // world as the cat; for the camera at origin looking down -Z, lifted
+    // points end up in front of the cat in graphics-world coordinates.
+    for (const m of markers) {
+      const [x, y, z] = m.center;
+      const item = new THREE.Group();
+      const dot = new THREE.Mesh(this.dotGeo, this.dotMat);
+      dot.position.set(x, y, z);
+      item.add(dot);
+
+      // Vertical stalk down to the floor for readability.
+      const stalkGeo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(x, y, z),
+        new THREE.Vector3(x, 0.002, z),
+      ]);
+      item.add(new THREE.Line(stalkGeo, this.stalkMat));
+
+      // Ground halo at the foot of the stalk.
+      const halo = new THREE.Mesh(this.haloGeo, this.haloMat);
+      halo.rotation.x = -Math.PI / 2;
+      halo.position.set(x, 0.003, z);
+      item.add(halo);
+
+      // Labels live in the Readouts panel rather than as in-scene sprites —
+      // multiple canvas-backed sprites in close proximity proved flaky in
+      // headless renderers, and the panel is the canonical place to inspect
+      // per-object metrics anyway.
+      void m.label;
+
+      this.group.add(item);
+      this.items.push(item);
+    }
+  }
+}
+
+function makeLabelSprite(text: string): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  const dpi = 2;
+  canvas.width = 220 * dpi;
+  canvas.height = 56 * dpi;
+  const ctx = canvas.getContext("2d")!;
+  ctx.scale(dpi, dpi);
+  ctx.font = '500 14px "JetBrains Mono", monospace';
+  const padX = 8;
+  const padY = 6;
+  const w = Math.min(220, Math.ceil(ctx.measureText(text).width) + padX * 2);
+  ctx.clearRect(0, 0, canvas.width / dpi, canvas.height / dpi);
+  // Background pill.
+  ctx.fillStyle = "rgba(11, 17, 18, 0.85)";
+  ctx.strokeStyle = "rgba(116, 247, 208, 0.6)";
+  ctx.lineWidth = 1;
+  roundRect(ctx, 1, 1, w - 2, 28 - 2, 3, true, true);
+  ctx.fillStyle = "#e7e1c8";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, padX, padY + 8);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  const mat = new THREE.SpriteMaterial({ map: texture, transparent: true });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(0.55, 0.14, 1);
+  return sprite;
+}
+
+function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number, r: number,
+  fill: boolean, stroke: boolean,
+) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+  if (fill) ctx.fill();
+  if (stroke) ctx.stroke();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

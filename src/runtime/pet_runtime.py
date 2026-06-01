@@ -57,6 +57,7 @@ class PetAction(BaseModel):
         "set_emotion",
         "ask",
         "state",
+        "world_update",
     ]
     target_position_3d: Waypoint | None = None
     path: list[Waypoint] | None = None
@@ -66,6 +67,8 @@ class PetAction(BaseModel):
     speed: float | None = None
     speech: str | None = None
     state: PetState | None = None
+    # Phase 3: lifted 3D centroids broadcast as a world update.
+    world_objects: list[dict[str, Any]] | None = None
     timestamp: float = Field(default_factory=time.time)
 
 
@@ -75,6 +78,9 @@ class PetRuntime:
     def __init__(self) -> None:
         self.state = PetState()
         self._subscribers: list[asyncio.Queue[PetAction]] = []
+        # Latest sticky world_update so newly-connected subscribers see the
+        # current scene markers without having to wait for the next push.
+        self._last_world_update: PetAction | None = None
 
     # ── subscription ────────────────────────────────────────────────────────
     def subscribe(self) -> asyncio.Queue[PetAction]:
@@ -87,6 +93,8 @@ class PetRuntime:
             self._subscribers.remove(q)
 
     def _broadcast(self, action: PetAction) -> None:
+        if action.action == "world_update":
+            self._last_world_update = action
         for q in list(self._subscribers):
             try:
                 q.put_nowait(action)
@@ -183,6 +191,9 @@ class PetRuntime:
 
     def snapshot(self) -> PetAction:
         return PetAction(action="state", state=self.state.model_copy())
+
+    def last_world_update(self) -> PetAction | None:
+        return self._last_world_update
 
     # ── batch / scripting ───────────────────────────────────────────────────
     def apply(self, action: dict[str, Any]) -> PetAction:

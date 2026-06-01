@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { PetState, PetAction } from "../composables/useWebSocket";
+import type { PetState, PetAction, WorldObjectMarker } from "../composables/useWebSocket";
 
 const props = defineProps<{
   state: PetState | null;
   history: PetAction[];
+  worldObjects?: WorldObjectMarker[];
 }>();
 
 const pos = computed(() => props.state?.position ?? { x: 0, y: 0, z: 0 });
 const recent = computed(() => props.history.slice(-9).reverse());
+const objects = computed(() => props.worldObjects ?? []);
 
 function fmt(n: number) {
   const s = n.toFixed(3);
@@ -62,13 +64,31 @@ function fmt(n: number) {
         <li v-if="recent.length === 0" class="ev__empty">— no events yet —</li>
       </ul>
     </div>
+
+    <div class="card">
+      <div class="card__head">
+        <span class="card__num">C</span>
+        <span class="card__title">world objects</span>
+        <span class="card__hint">lifted · phase 3</span>
+      </div>
+      <ul class="objs">
+        <li v-for="o in objects" :key="o.object_id" class="obj">
+          <span class="obj__dot" />
+          <span class="obj__label">{{ o.class_label }}</span>
+          <span class="obj__xyz">
+            ({{ o.center_3d_world.map((v) => v.toFixed(2)).join(", ") }})
+          </span>
+        </li>
+        <li v-if="objects.length === 0" class="ev__empty">— no lifted objects —</li>
+      </ul>
+    </div>
   </section>
 </template>
 
 <style scoped>
 .readouts {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 260px 1fr 260px;
   gap: 14px;
   padding: 14px 18px;
   border-top: 1px solid var(--c-line);
@@ -125,4 +145,23 @@ function fmt(n: number) {
 .ev__kind { color: var(--c-phosphor); text-transform: uppercase; letter-spacing: 0.16em; }
 .ev__detail { color: var(--c-bone); }
 .ev__empty { color: var(--c-bone-faint); padding: 12px 0; text-align: center; letter-spacing: 0.18em; text-transform: uppercase; font-size: 10px; }
+
+.objs { list-style: none; margin: 0; padding: 0; max-height: 130px; overflow: auto; }
+.obj {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px dotted var(--c-line);
+  font-size: 11px;
+}
+.obj:last-child { border-bottom: 0; }
+.obj__dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--c-phosphor);
+  box-shadow: 0 0 6px var(--c-phosphor);
+}
+.obj__label { color: var(--c-bone); letter-spacing: 0.08em; }
+.obj__xyz { color: var(--c-phosphor); font-variant-numeric: tabular-nums; }
 </style>
