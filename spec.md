@@ -107,15 +107,15 @@ The project does not make OpenScene the first implementation backbone. OpenScene
 
 | Component | Target |
 |---|---|
-| GPU | NVIDIA RTX 4070 12GB |
-| CPU | Modern desktop CPU |
-| RAM | 16GB minimum, 32GB recommended |
+| GPU | NVIDIA GeForce RTX 4070, 12282 MiB VRAM, driver 580.159.04 |
+| CPU | Intel Core i7-10700 @ 2.90GHz, 8 cores / 16 threads |
+| RAM | 64GB system RAM available on the current development machine; 32GB remains the recommended practical minimum |
 | Camera | Webcam, phone camera stream, or optional RGB-D camera |
-| OS | Ubuntu preferred, Windows WSL2 acceptable with CUDA caveats |
+| OS | Linux / Ubuntu as the primary development target; Windows WSL2 acceptable with CUDA caveats |
 | Renderer | Three.js, Unity, or Godot |
 | Backend | Python service with WebSocket or HTTP API |
 
-The RTX 4070 12GB is suitable for local inference with object detection, segmentation, depth estimation, and lightweight 3D rendering. It is not a realistic target for training a new large-scale 3D vision-language foundation model.
+The current Linux development machine is strong enough for local interactive inference with object detection, segmentation, depth estimation, tracking, and lightweight 3D rendering. The RTX 4070 has about 12GB of VRAM, so the implementation should still use model-size controls, mixed precision where possible, frame-rate throttling, and backend update scheduling instead of loading every large model at full resolution simultaneously. This hardware is not a realistic target for training a new large-scale 3D vision-language foundation model.
 
 ### 1.5 Technical Positioning
 
@@ -699,6 +699,8 @@ for each object:
 
 ### 7.2 Tracking Strategy
 
+Start with a deterministic tracker implemented in the project, then allow an optional ByteTrack-style backend through `supervision` once detector outputs are stable.
+
 Object association should use:
 
 ```text
@@ -708,6 +710,14 @@ IoU of masks or boxes
 + 3D center distance
 + depth consistency
 + optional visual embedding similarity
+```
+
+Recommended default:
+
+```text
+Phase 4 baseline: simple IoU / class / center-distance tracker
+Optional upgrade: ByteTrack-style association through supervision
+Reason: ByteTrack is popular for multi-object tracking, but this project also needs class labels, depth consistency, and scene-graph confidence, so a small custom association layer remains useful even when using a tracking library.
 ```
 
 ### 7.3 Temporal Smoothing
@@ -1218,7 +1228,10 @@ Each test sample should include:
       report_tables.py
   frontend/
     package.json
+    vite.config.ts
+    tsconfig.json
     src/
+      main.ts
       App.vue
       renderer/
       debug_panel/
@@ -1249,15 +1262,18 @@ Each test sample should include:
 torch
 torchvision
 opencv-python
+open3d
 numpy
 scipy
 pydantic
+pydantic-settings
 pyyaml
 pillow
 matplotlib
 websockets
 fastapi
 uvicorn
+supervision
 ```
 
 ### 15.2 Vision Models
@@ -1270,7 +1286,39 @@ Optional: CLIP or SigLIP for re-ranking visual-text matches
 Optional: OpenScene research backend dependencies
 ```
 
-### 15.3 3D Runtime Options
+### 15.3 Tracking and 3D Utilities
+
+```text
+supervision for detection and tracking result adapters
+ByteTrack-style association as the default live tracking baseline
+Open3D for point clouds, 3D geometry utilities, and static-scene debugging
+```
+
+Tracking choice:
+
+```text
+Use a simple IoU / class / center-distance tracker first, then expose a ByteTrack-style backend through supervision when detector outputs are stable. This keeps the live demo debuggable while leaving a path to a popular MOT-style tracker without making tracking the first bottleneck.
+```
+
+### 15.4 Frontend and 3D Runtime
+
+```text
+Vue 3
+Vite
+Vite Vue plugin web toolchain
+TypeScript
+three
+@tweenjs/tween.js
+lil-gui
+```
+
+3D helper choice:
+
+```text
+Use native Three.js helpers instead of React-only wrappers. three owns rendering, @tweenjs/tween.js handles pet movement interpolation, and lil-gui provides a compact debug control panel for renderer state, camera parameters, and scene graph overlays.
+```
+
+### 15.5 3D Runtime Options
 
 | Runtime | Pros | Cons |
 |---|---|---|
@@ -1281,13 +1329,21 @@ Optional: OpenScene research backend dependencies
 Recommended first implementation:
 
 ```text
-Three.js frontend + Python backend via WebSocket
+Vue 3 + Vite + TypeScript frontend using Three.js, connected to a Python backend via WebSocket
 ```
 
 Reason:
 
 ```text
-A browser-based debug UI can show camera frames, masks, depth maps, scene graph, and pet animation in one place.
+A browser-based debug UI can show camera frames, masks, depth maps, scene graph, and pet animation in one place. Vue 3 keeps the debug panel and app state organized, while Three.js remains responsible for the 3D scene.
+```
+
+### 15.6 Development Tooling
+
+```text
+uv for Python environment and dependency locking
+ruff for linting and formatting
+pytest for unit, integration, and replay tests
 ```
 
 ---
@@ -1316,6 +1372,10 @@ depth:
 openscene:
   enabled: false
   scene_root: data/openscene
+
+settings:
+  loader: pydantic-settings
+  env_prefix: PET_AGENT_
 ```
 
 ### 16.2 `configs/thresholds.yaml`
@@ -1326,6 +1386,7 @@ grounding:
   ambiguity_margin: 0.12
 
 tracking:
+  backend: simple_iou_then_bytetrack
   min_iou: 0.35
   max_center_distance: 0.20
   persistence_frames: 3
