@@ -133,6 +133,7 @@ class PetRuntime:
         *,
         speed: float | None = None,
         look_at_object_id: str | None = None,
+        controller_trace: dict[str, Any] | None = None,
     ) -> PetAction:
         """Walk along a planned path (spec §3.7 ``move_follow_path``).
 
@@ -157,6 +158,7 @@ class PetRuntime:
             animation="walk",
             speed=self.state.speed,
             state=self.state.model_copy(),
+            controller_trace=controller_trace,
         )
         self._broadcast(action)
         return action

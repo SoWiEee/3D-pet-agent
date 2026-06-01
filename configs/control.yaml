@@ -1,0 +1,30 @@
+# Pure-pursuit controller (spec §11).
+#
+# All units SI. Distances in metres, angles in radians, speeds in m/s.
+# `dt` is the integration step used by the offline simulation; the
+# frontend tween consumes the resulting dense path at `base_speed`.
+kinematic:
+  v_max: 0.80          # m/s — hard upper bound on translational speed
+  v_min: 0.05          # m/s — minimum non-zero speed to avoid jitter at low headings
+  omega_max: 3.20      # rad/s — yaw rate limit (~183 deg/s)
+  dt: 0.05             # s — integrator step (20 Hz, well below 30 Hz control rate)
+  max_steps: 400       # safety cap on simulation length per path
+
+pure_pursuit:
+  lookahead_distance: 0.30   # m — first point on path at distance ≥ this is target
+  base_speed: 0.45           # m/s — speed at zero heading error (cos²(0)=1)
+  kp_heading: 2.40           # rad/s per rad of heading error
+  goal_tolerance: 0.08       # m — declare success when within this of last waypoint
+  cross_track_tolerance: 0.20  # m — soft threshold for logging only
+
+speed_pid:
+  kp: 1.20
+  ki: 0.05
+  kd: 0.02
+  integral_clamp: 0.40       # anti-windup
+
+preempt:
+  # When a new command arrives, the in-flight path is cancelled within this
+  # window. The renderer is responsible for honouring the most-recent
+  # move_follow_path it received.
+  max_latency_s: 0.10

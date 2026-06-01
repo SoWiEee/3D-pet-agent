@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -26,7 +27,13 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from ..config import load_navigation
+from ..config import load_control, load_navigation
+from ..control import (
+    PathFollower,
+    PIDController,
+    PurePursuitController,
+    UnicycleState,
+)
 from ..language import parse_command
 from ..planning import GridConfig, GroundingResolver, Planner, PlannerConfig
 from ..spatial import SceneGraphBuilder, SemanticMap
@@ -66,6 +73,35 @@ planner = Planner(
     )
 )
 _default_speed = _nav_cfg.planner.default_speed
+
+# ── Phase 8: pure-pursuit controller (offline simulator) ────────────────────
+_ctrl_cfg = load_control()
+_pure_pursuit = PurePursuitController(
+    lookahead_distance=_ctrl_cfg.pure_pursuit.lookahead_distance,
+    base_speed=_ctrl_cfg.pure_pursuit.base_speed,
+    kp_heading=_ctrl_cfg.pure_pursuit.kp_heading,
+    v_max=_ctrl_cfg.kinematic.v_max,
+    v_min=_ctrl_cfg.kinematic.v_min,
+    omega_max=_ctrl_cfg.kinematic.omega_max,
+)
+_speed_pid = PIDController(
+    kp=_ctrl_cfg.speed_pid.kp,
+    ki=_ctrl_cfg.speed_pid.ki,
+    kd=_ctrl_cfg.speed_pid.kd,
+    integral_clamp=_ctrl_cfg.speed_pid.integral_clamp,
+)
+path_follower = PathFollower(
+    controller=_pure_pursuit,
+    pid=_speed_pid,
+    v_max=_ctrl_cfg.kinematic.v_max,
+    omega_max=_ctrl_cfg.kinematic.omega_max,
+    dt=_ctrl_cfg.kinematic.dt,
+    max_steps=_ctrl_cfg.kinematic.max_steps,
+    goal_tolerance=_ctrl_cfg.pure_pursuit.goal_tolerance,
+)
+
+# Sticky last trace for debug overlay.
+_last_trace_summary: dict[str, Any] | None = None
 
 
 @asynccontextmanager
@@ -314,10 +350,22 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
             "planner_status": plan.status,
             "goal": goal.model_dump(),
         }
+
+    # Phase 8: run the offline pure-pursuit simulator over the planner's
+    # waypoints so the renderer receives a dense, dynamically-feasible
+    # trajectory rather than chunky LOS-pruned segments. The cat's heading
+    # comes from the first non-degenerate segment of the planner path (no
+    # heading is carried in PetState today; this is a deliberate trade-off
+    # so the controller stays stateless across commands).
+    initial = _initial_state_from_plan(plan.path_world)
+    trace = path_follower.simulate(plan.path_world, initial)
+    global _last_trace_summary
+    _last_trace_summary = _trace_summary_dict(trace.summary, plan.path_world)
     runtime.move_follow_path(
-        plan.path_world,
-        speed=_default_speed,
+        trace.path_world,
+        speed=_ctrl_cfg.pure_pursuit.base_speed,
         look_at_object_id=goal.target_object_id,
+        controller_trace=_last_trace_summary,
     )
     return {
         "parsed": True,
@@ -326,6 +374,78 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
         "goal": goal.model_dump(),
         "planner_status": plan.status,
         "path_waypoints": len(plan.path_world),
+        "control_steps": trace.summary.steps,
+        "control_status": trace.summary.status,
+    }
+
+
+def _initial_state_from_plan(path_world: list[tuple[float, float, float]]) -> UnicycleState:
+    """Build an :class:`UnicycleState` from the cat's current position and the
+    planner-supplied path direction.
+
+    PetState doesn't carry yaw, so we derive heading from the first
+    non-degenerate segment of the planner path. This biases the controller
+    toward the path's natural direction on the first tick — small heading
+    errors are then absorbed by the pure-pursuit P-gain over the rest of
+    the trajectory.
+    """
+    pos = runtime.state.position
+    theta = 0.0
+    for a, b in zip(path_world[:-1], path_world[1:], strict=True):
+        dx, dz = b[0] - a[0], b[2] - a[2]
+        if (dx * dx + dz * dz) > 1e-9:
+            theta = math.atan2(dz, dx)
+            break
+    return UnicycleState(x=pos.x, y=pos.z, theta=theta)
+
+
+def _trace_summary_dict(
+    summary: Any, planner_path: list[tuple[float, float, float]]
+) -> dict[str, Any]:
+    return {
+        "status": summary.status,
+        "steps": summary.steps,
+        "duration_s": round(summary.duration_s, 3),
+        "final_distance_to_goal": round(summary.final_distance_to_goal, 4),
+        "max_cross_track_error": round(summary.max_cross_track_error, 4),
+        "max_heading_error": round(summary.max_heading_error, 4),
+        "mean_speed": round(summary.mean_speed, 4),
+        "planner_waypoints": len(planner_path),
+    }
+
+
+@app.get("/control/last_trace")
+async def get_last_control_trace() -> dict[str, Any]:
+    """Phase 8 debug endpoint. Empty dict when no command has been planned yet."""
+    return _last_trace_summary or {}
+
+
+class SimulateRequest(BaseModel):
+    path: list[Waypoint]
+    start: Waypoint | None = None
+    start_theta: float | None = None
+
+
+@app.post("/control/simulate")
+async def simulate_path(req: SimulateRequest) -> dict[str, Any]:
+    """Offline simulation of the controller against an arbitrary path.
+
+    Useful for the demo notebook + acceptance harness; does not touch
+    pet state or broadcast anything.
+    """
+    if not req.path:
+        return {"status": "empty_path"}
+    if req.start is not None:
+        sx, _, sz = req.start
+    else:
+        pos = runtime.state.position
+        sx, sz = pos.x, pos.z
+    theta = req.start_theta if req.start_theta is not None else 0.0
+    initial = UnicycleState(x=sx, y=sz, theta=theta)
+    trace = path_follower.simulate(req.path, initial)
+    return {
+        "summary": _trace_summary_dict(trace.summary, req.path),
+        "path_world": trace.path_world,
     }
 
 

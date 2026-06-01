@@ -126,6 +126,41 @@ class NavigationConfig(BaseModel):
     constraints: NavigationConstraintsConfig = Field(default_factory=NavigationConstraintsConfig)
 
 
+# ── Phase 8: control ────────────────────────────────────────────────────────
+class KinematicConfig(BaseModel):
+    v_max: float = 0.80
+    v_min: float = 0.05
+    omega_max: float = 3.20
+    dt: float = 0.05
+    max_steps: int = 400
+
+
+class PurePursuitConfig(BaseModel):
+    lookahead_distance: float = 0.30
+    base_speed: float = 0.45
+    kp_heading: float = 2.40
+    goal_tolerance: float = 0.08
+    cross_track_tolerance: float = 0.20
+
+
+class SpeedPIDConfig(BaseModel):
+    kp: float = 1.20
+    ki: float = 0.05
+    kd: float = 0.02
+    integral_clamp: float = 0.40
+
+
+class PreemptConfig(BaseModel):
+    max_latency_s: float = 0.10
+
+
+class ControlConfig(BaseModel):
+    kinematic: KinematicConfig = Field(default_factory=KinematicConfig)
+    pure_pursuit: PurePursuitConfig = Field(default_factory=PurePursuitConfig)
+    speed_pid: SpeedPIDConfig = Field(default_factory=SpeedPIDConfig)
+    preempt: PreemptConfig = Field(default_factory=PreemptConfig)
+
+
 class Settings(BaseSettings):
     """Environment overrides — see spec §16 (PET_AGENT_ prefix)."""
 
@@ -162,6 +197,15 @@ def load_navigation(config_dir: Path = CONFIG_DIR) -> NavigationConfig:
     return NavigationConfig(**_load_yaml(path))
 
 
+def load_control(config_dir: Path = CONFIG_DIR) -> ControlConfig:
+    """Phase 8: pure-pursuit controller + PID config. Optional — defaults match
+    ``configs/control.yaml`` so tests can run without the YAML file present."""
+    path = config_dir / "control.yaml"
+    if not path.exists():
+        return ControlConfig()
+    return ControlConfig(**_load_yaml(path))
+
+
 def load_prompts(config_dir: Path = CONFIG_DIR) -> list[str]:
     path = config_dir / "prompts.txt"
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -174,6 +218,7 @@ class AppConfig(BaseModel):
     thresholds: ThresholdsConfig
     runtime: RuntimeConfig
     navigation: NavigationConfig = Field(default_factory=NavigationConfig)
+    control: ControlConfig = Field(default_factory=ControlConfig)
     settings: Settings = Field(default_factory=Settings)
 
     @classmethod
@@ -183,4 +228,5 @@ class AppConfig(BaseModel):
             thresholds=load_thresholds(config_dir),
             runtime=load_runtime(config_dir),
             navigation=load_navigation(config_dir),
+            control=load_control(config_dir),
         )
