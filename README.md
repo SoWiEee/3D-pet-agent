@@ -17,6 +17,11 @@
   - [安裝步驟](#安裝步驟)
   - [Phase 1：3D 寵物 sandbox](#phase-13d-寵物-sandbox)
   - [Phase 2：感知主線（偵測 + 分割）](#phase-2感知主線偵測--分割)
+  - [Phase 3：3D 物件 lifting（深度估計 + FramePacket）](#phase-33d-物件-lifting深度估計--framepacket)
+  - [Phase 4：物件追蹤 + 持久 SemanticMap](#phase-4物件追蹤--持久-semanticmap)
+  - [Phase 5–6：場景圖 + 命令 grounding](#phase-56場景圖--命令-grounding)
+  - [Phase 7–8：A\* 規劃 + pure-pursuit 控制](#phase-78a-規劃--pure-pursuit-控制)
+  - [Phase 9：主動探索](#phase-9主動探索)
   - [End-to-End 互動 demo（後端 + 前端）](#end-to-end-互動-demo後端--前端)
 - [專案結構](#專案結構)
 - [技術棧](#技術棧)
@@ -127,7 +132,7 @@ cd ..
 .venv/bin/pytest tests/ -q
 ```
 
-預期看到 `cuda: True` 與 `23 passed`。
+預期看到 `cuda: True` 與 `227 passed`。
 
 ---
 
@@ -229,6 +234,98 @@ curl -X POST http://127.0.0.1:8000/perception/lifted \
 
 ---
 
+### Phase 4：物件追蹤 + 持久 SemanticMap
+
+在 `snapshot` 模式加 `--track`，會串接 Phase 3 lifter → IoU + class + 3D-distance 貪婪關聯 tracker（穩定 `track_NNN` id）→ 持久 SemanticMap（EMA 位置融合、Bayes 信心更新、`tracked → occluded → stale → lost` 狀態機）：
+
+```bash
+.venv/bin/python main.py --mode snapshot \
+  --image samples/desk.jpg \
+  --prompts configs/prompts.txt \
+  --lift --track --frames 5 \
+  --out runs
+```
+
+額外輸出：
+
+| 輸出 | 內容 |
+|---|---|
+| `runs/semantic_map_<image>.json` | 持久 SemanticMap：每個 track 的最新 `ObjectState3D`、`confidence.overall`、`tracking_status`、`last_seen_frame` |
+
+> 持久 map 是 byte-identical save→load，可隨時 `SemanticMap.load(path)` 接續上一輪追蹤。
+
+---
+
+### Phase 5–6：場景圖 + 命令 grounding
+
+後端啟動後（見下方 demo 章節），SemanticMap 上每一次更新都會即時重算場景圖（11 種關係 — `left_of/right_of/in_front_of/behind/above/below/near/far_from/between/on_surface/occluding`，全部以平滑 ramp 評分），透過 `world_update` 廣播給前端的 RELATIONS 面板。
+
+```bash
+# 取得目前場景圖（pair + triple 關係，按分數排序）
+curl http://127.0.0.1:8000/scene/graph | jq
+
+# 送一句指令給後端
+curl -X POST http://127.0.0.1:8000/command \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"go to the cup"}'
+
+# 帶關係的指令
+curl -X POST http://127.0.0.1:8000/command \
+  -d '{"text":"hide behind the keyboard but avoid the mouse"}'
+```
+
+`POST /command` 會完整跑：rule-based parser（10 種 `intent_type`）→ grounding resolver（`0.35·semantic + 0.20·attribute + 0.25·relation + 0.10·visibility + 0.10·feasibility`）→ 多候選時觸發 clarification ask、低信心時帶 explanation。
+
+---
+
+### Phase 7–8：A\* 規劃 + pure-pursuit 控制
+
+成功 grounding 後，server 會：
+1. 把 SemanticMap rasterise 成 XZ 平面 `OccupancyGrid`（包含 `obstacle_padding` 膨脹 + per-target 排除 + `avoid_object` halo）
+2. 跑 8-connectivity A\*（Euclidean heuristic、no corner-cut、Bresenham LOS pruning）
+3. 把 LOS-pruned 路徑送進 pure-pursuit 離線模擬器：`UnicycleState (x, y, θ)` + `v = clamp(base·cos²(he), v_min, v_max)` + `ω = Kp·he` + anti-windup PID 速度平滑 + slow-down radius
+4. 廣播 `move_follow_path`，帶 dense 動力學可行軌跡 + `controller_trace`（`steps / duration_s / max_cross_track_error / max_heading_error / mean_speed`）給前端
+
+```bash
+# Debug：取得目前 occupancy grid（含 obstacle 膨脹後 blocked cells 數）
+curl http://127.0.0.1:8000/planning/occupancy | jq '.blocked_cells'
+
+# Debug：取得最近一次控制器 trace summary
+curl http://127.0.0.1:8000/control/last_trace | jq
+
+# 對任意路徑做離線控制模擬（不更動寵物狀態）
+curl -X POST http://127.0.0.1:8000/control/simulate \
+  -d '{"path":[[0,0,0],[1,0,1]],"start":[0,0,0],"start_theta":0.0}'
+```
+
+控制配置位於 `configs/control.yaml`（kinematic 限制、lookahead、PID 增益、preempt latency）。
+
+---
+
+### Phase 9：主動探索
+
+`CoverageGrid` 用 uint16 計數器追蹤已觀察 / 未觀察 cells（與 nav grid 同框架），透過 vectorised cone sweep 更新；`ExplorationPlanner` 用 spec §12.1 啟發式（`0.40·new_area + 0.25·uncertainty + 0.20·search_relevance − 0.15·travel_cost`）在 4 種 goal 種類間挑下一個 viewpoint。
+
+```bash
+# 標記一個觀察 cone（攝影機在 (0,0)，朝 +x，FOV 90°，range 1 m）
+curl -X POST http://127.0.0.1:8000/exploration/observe \
+  -d '{"camera_xz":[0,0],"heading_rad":0,"fov_rad":1.5708,"range_m":1.0}'
+
+# 取下一個探索 goal 並讓寵物走過去（會跑 planner + controller pipeline）
+curl -X POST http://127.0.0.1:8000/exploration/step -d '{}'
+
+# 自然語言指令同樣會 route 進來
+curl -X POST http://127.0.0.1:8000/command \
+  -d '{"text":"explore the desk and tell me what you found"}'
+
+# 取得目前 coverage grid 與未觀察比率
+curl http://127.0.0.1:8000/exploration/coverage | jq '.unobserved_ratio'
+```
+
+新發現的物件 id 會透過 `runtime.ask()` 在前端的對話泡泡裡報告。
+
+---
+
 ### End-to-End 互動 demo（後端 + 前端）
 
 啟動 FastAPI 後端與 Vite 前端，在瀏覽器中看到 3D 貓即時跟隨指令動作。
@@ -257,14 +354,20 @@ http://127.0.0.1:5173/
 **驅動寵物的幾種方式：**
 
 - **底部命令列**輸入文字（按 Enter 送出）：
-  - `move 0.5 0 1.2` — 直接移動到指定座標（tween）
-  - `path 0 0 0 ; 0.3 0 0.5 ; 0.6 0 1.0` — 沿路徑點走（path-following，Phase 8 controller 預備）
-  - `look -0.3 0.4 1.0` — 看向某點
-  - `anim sit` / `anim hide` / `anim curious` — 切換動畫
-  - `emote curious` / `emote happy` — 切換情緒
-  - `say hello` — 寵物說話（會以斜體 serif 浮現）
+  - **自然語言指令**（會走 Phase 6 parser → grounding → A\* → controller）：
+    - `go to the cup`
+    - `hide behind the keyboard but avoid the mouse`
+    - `look at the monitor`
+    - `explore the desk`
+  - **低階直接命令**：
+    - `move 0.5 0 1.2` — 直接 tween 到指定座標
+    - `path 0 0 0 ; 0.3 0 0.5 ; 0.6 0 1.0` — 沿給定路徑（chained Tween + smooth heading）
+    - `look -0.3 0.4 1.0` — 看向某點
+    - `anim sit` / `anim hide` / `anim curious` — 切換動畫
+    - `emote curious` / `emote happy` — 切換情緒
+    - `say hello` — 寵物說話
 
-- **快捷按鈕**：「P1 · cup / P2 · keyboard / path · A* / sit / hide / curious」。
+- **快捷按鈕**：「P1 · cup / P2 · keyboard / path · A\* / sit / hide / curious」。
 
 - **HTTP API**（適合腳本化或測試）：
   ```bash
@@ -280,8 +383,6 @@ http://127.0.0.1:5173/
     -d @runs/snapshot_desk.json
   ```
 
-> 完整 grounding（理解「躲到 X 後面」這類關係指令）屬於 Phase 6，目前尚未實作。
-
 **主要 HTTP / WS 端點：**
 
 | Endpoint | 用途 |
@@ -289,62 +390,123 @@ http://127.0.0.1:5173/
 | `GET  /healthz` | 健康檢查 |
 | `GET  /pet/state` | 取得目前 PetState |
 | `POST /pet/action` | 送一個 `PetAction`（`move_to` / `move_follow_path` / `look_at` / `play_animation` / `set_emotion` / `ask`）|
-| `POST /pet/perception` | 餵 Phase 2 感知結果，placeholder 行為會產生 3 點 `move_follow_path` 驅動寵物 |
-| `POST /perception/lifted` | 餵 Phase 3 lifted 結果（`runs/lifted_*.json`），廣播 `world_update` 讓前端畫 3D 中心點 marker |
-| `WS   /ws/pet` | 雙向動作串流（前端訂閱用，新連線會收到當前 PetState + 最近一次 `world_update`）|
+| `POST /pet/perception` | 餵 Phase 2 感知結果（placeholder 行為）|
+| `POST /perception/lifted` | 餵 Phase 3/4 lifted 結果；server 端跑 tracker → SemanticMap → SceneGraph，廣播 `world_update` |
+| `GET  /semantic/map` | 取得目前持久 SemanticMap |
+| `POST /semantic/reset` | 清空 tracker + SemanticMap |
+| `GET  /scene/graph` | 取得目前場景圖（pair + triple 關係，按分數排序）|
+| `GET  /planning/occupancy` | Debug：取得 Phase 7 occupancy grid 快照 |
+| `POST /command` | **核心入口**：自然語言指令 → parser → grounding → A\* → controller → `move_follow_path` |
+| `GET  /control/last_trace` | 取得最近一次 controller trace summary |
+| `POST /control/simulate` | 對任意路徑做離線 pure-pursuit 模擬（不更動寵物狀態）|
+| `POST /exploration/observe` | 標記一個觀察 cone 進 CoverageGrid |
+| `POST /exploration/step` | 跑一輪探索（pick goal → plan → controller → broadcast）|
+| `GET  /exploration/coverage` | Debug：取得 CoverageGrid 快照 |
+| `POST /exploration/reset` | 清空 CoverageGrid |
+| `WS   /ws/pet` | 雙向動作串流（新連線會收到當前 PetState + 最近一次 `world_update`）|
 
 ---
 
 ## 專案結構
 
-目前已實作（Phase 1 + 2）的檔案：
+Phases 1–9 已實作的後端模組：
 
 ```text
 3D-pet-agent/
 ├── main.py                      # CLI 入口
 ├── pyproject.toml               # uv-managed 套件 + ruff / pytest 設定
 ├── configs/
-│   ├── models.yaml              # 模型 ID、device、閾值（spec §16.1）
+│   ├── models.yaml              # 模型 ID、device、閾值
 │   ├── thresholds.yaml          # grounding / tracking / relations / behavior
 │   ├── runtime.yaml             # 更新率、server host/port
-│   └── prompts.txt              # 預設桌面詞彙
+│   ├── navigation.yaml          # Phase 7：grid、planner、constraints
+│   ├── control.yaml             # Phase 8：kinematic、pure_pursuit、speed_pid
+│   └── prompts.txt
 ├── src/
 │   ├── config.py                # AppConfig（pydantic-settings，PET_AGENT_ 前綴）
-│   ├── cli.py                   # --mode 派發
+│   ├── cli.py                   # --mode 派發；snapshot --lift --track
 │   ├── camera_service/          # image_reader / video_reader / webcam
 │   ├── perception/
 │   │   ├── detector.py          # GroundingDINO 包裝
 │   │   ├── segmenter.py         # SAM 包裝
-│   │   ├── depth.py             # Depth Anything V2（Phase 3 接入用，已預備）
-│   │   ├── pipeline.py          # 偵測 → 分割 → ObjectCandidate2D
-│   │   └── schema.py            # PerceptionResult / ObjectCandidate2D（spec §5.4）
+│   │   ├── depth.py             # Depth Anything V2（lazy load + CPU fallback）
+│   │   ├── pipeline.py          # run_frame_3d / run_frame_tracked
+│   │   └── schema.py
+│   ├── spatial/
+│   │   ├── frame_packet.py      # FramePacket、CameraIntrinsics、CameraPoseWorld
+│   │   ├── pose_source.py       # Fixed / Sim / SLAM pose sources
+│   │   ├── object_lifter.py     # 2D mask → 3D centroid（percentile depth + 軸翻轉）
+│   │   ├── semantic_map.py      # 持久 SemanticMap（EMA + Bayes + status machine）
+│   │   ├── relation_scorer.py   # 11 種關係的 smooth-ramp 評分
+│   │   └── scene_graph.py       # SceneGraphBuilder（pair + triple 走訪）
+│   ├── tracking/
+│   │   └── tracker.py           # IoU + class + 3D-distance 貪婪關聯
+│   ├── language/
+│   │   ├── schema.py            # CommandIntent / TargetSpec / RelationSpec
+│   │   └── command_parser.py    # 10 種 intent 的 rule-based parser
+│   ├── planning/
+│   │   ├── schema.py            # NavigationGoal / NavigationConstraint
+│   │   ├── grounding_resolver.py# Phase 6：候選評分 + clarification
+│   │   ├── occupancy_grid.py    # XZ rasterise + obstacle 膨脹 + halo
+│   │   ├── astar.py             # 8-conn A* + LOS pruning
+│   │   └── planner.py           # Planner orchestrator
+│   ├── control/
+│   │   ├── kinematic.py         # frozen UnicycleState + kinematic_step
+│   │   ├── pid.py               # immutable PID + anti-windup
+│   │   ├── pure_pursuit.py      # lookahead + cos² 速度律
+│   │   └── path_follower.py     # 離線模擬器 + ControlSummary
+│   ├── exploration/
+│   │   ├── coverage_grid.py     # uint16 觀察計數 + 未知區域 cluster
+│   │   └── exploration_planner.py # 4 種 ExplorationGoal + §12.1 評分
 │   └── runtime/
-│       ├── pet_runtime.py       # PetState + 動作 API（spec §4.3）
-│       └── websocket_server.py  # FastAPI app + /ws/pet
+│       ├── pet_runtime.py       # PetState + 動作 API（含 move_follow_path、controller_trace）
+│       └── websocket_server.py  # FastAPI app + 全部 endpoint
 ├── frontend/                    # Vue 3 + Vite + TypeScript + native Three.js
 │   └── src/
 │       ├── App.vue
-│       ├── renderer/PetScene.ts # Three.js 場景（貓、地板網格、目標標記、tween）
+│       ├── renderer/PetScene.ts # Three.js 場景，含 followPath chained tween
 │       ├── composables/useWebSocket.ts
 │       └── components/
 │           ├── StatusBar.vue
 │           ├── ModulePanel.vue
 │           ├── Readouts.vue
 │           ├── CommandBar.vue
+│           ├── WorldObjectsLayer.vue
+│           ├── RelationEdgesLayer.vue
 │           ├── RegistrationMarks.vue
 │           └── PetSpeech.vue
-├── tests/                       # 23 個單元測試
+├── tests/                       # 227 個測試（unit + 整合 + server smoke）
 │   ├── test_config.py
 │   ├── test_pet_runtime.py
 │   ├── test_cli.py
-│   └── test_perception_schema.py
+│   ├── test_perception_schema.py
+│   ├── test_frame_packet.py
+│   ├── test_object_lifter.py
+│   ├── test_tracker.py
+│   ├── test_semantic_map.py
+│   ├── test_relation_scorer.py
+│   ├── test_scene_graph.py
+│   ├── test_command_parser.py
+│   ├── test_grounding_resolver.py
+│   ├── test_occupancy_grid.py
+│   ├── test_astar.py
+│   ├── test_planner.py
+│   ├── test_kinematic.py
+│   ├── test_pid.py
+│   ├── test_pure_pursuit.py
+│   ├── test_path_follower.py
+│   ├── test_controller_server.py
+│   ├── test_coverage_grid.py
+│   ├── test_exploration_planner.py
+│   └── test_exploration_server.py
+├── .github/workflows/ci.yml     # backend + frontend CI（Phase 6）
 ├── samples/
-│   ├── desk.jpg                 # COCO 測試圖
-│   └── pet_actions.jsonl        # sandbox 腳本範例
+│   ├── desk.jpg
+│   └── pet_actions.jsonl
 └── runs/                        # （gitignored）感知輸出、debug 影像
 ```
 
-完整規劃結構（含 Phase 3+ 模組）見 `docs/spec.md §14`。
+完整規劃結構見 `docs/spec.md §14`；模組層職責對應見 `CLAUDE.md`。
 
 ---
 
@@ -385,6 +547,8 @@ http://127.0.0.1:5173/
 | `configs/models.yaml` | 模型 ID、device、box/text thresholds |
 | `configs/thresholds.yaml` | grounding / tracking / spatial relation / behavior 閾值 |
 | `configs/runtime.yaml` | 感知 / tracking / renderer 更新率，server host/port |
+| `configs/navigation.yaml` | Phase 7：grid 解析度與範圍、planner connectivity、constraint halo |
+| `configs/control.yaml` | Phase 8：kinematic 限制、pure-pursuit 增益、PID、preempt latency |
 | `configs/prompts.txt` | 預設物件提示詞清單 |
 
 環境變數覆寫使用 `PET_AGENT_` 前綴：
@@ -418,12 +582,12 @@ cd frontend && npx vue-tsc --noEmit
 1. ✅ Phase 1 — 3D 寵物 sandbox（含 path-following）
 2. ✅ Phase 2 — Snapshot 偵測 + 分割
 3. ✅ Phase 3 — Depth + FramePacket + 3D 物件 lifting
-4. ⬜ Phase 4 — 物件追蹤 + SemanticMap（持久語意地圖）
-5. ⬜ Phase 5 — Scene Graph 與空間關係
-6. ⬜ Phase 6 — Command 解析與 Grounding Resolver → NavigationGoal
-7. ⬜ Phase 7 — Occupancy grid + A* path planning
-8. ⬜ Phase 8 — Pure-pursuit controller + 運動學模型
-9. ⬜ Phase 9 — Active exploration
+4. ✅ Phase 4 — 物件追蹤 + SemanticMap（持久語意地圖）
+5. ✅ Phase 5 — Scene Graph 與空間關係
+6. ✅ Phase 6 — Command 解析與 Grounding Resolver → NavigationGoal
+7. ✅ Phase 7 — Occupancy grid + A* path planning
+8. ✅ Phase 8 — Pure-pursuit controller + 運動學模型
+9. ✅ Phase 9 — Active exploration
 10. ⬜ Phase 10 — Evaluation + demo packaging
 
 Optional 擴充（不阻塞主線 demo）：
@@ -441,15 +605,17 @@ Optional 擴充（不阻塞主線 demo）：
 |---|---|---|
 | 1 | 3D 寵物 runtime + sandbox（含 `move_follow_path`） | ✅ 完成 |
 | 2 | 互動主線感知（GroundingDINO + SAM） | ✅ 完成 |
-| 3 | Depth + FramePacket + 3D 物件 lifting | ✅ 完成（`snapshot --lift` + 前端 marker 已驗證）|
-| 4 | 物件追蹤 + SemanticMap（持久語意地圖） | ⬜ 待實作 |
-| 5 | Scene Graph 與空間關係 | ⬜ 待實作 |
-| 6 | Command 解析 + Grounding Resolver → NavigationGoal | ⬜ 待實作（目前以最高信心物件作為 placeholder 行為）|
-| 7 | Occupancy grid + A* path planning | ⬜ 待實作 |
-| 8 | Pure-pursuit controller + 運動學模型 | ⬜ 待實作（schema 已就緒）|
-| 9 | Active exploration | ⬜ 待實作 |
+| 3 | Depth + FramePacket + 3D 物件 lifting | ✅ 完成（`snapshot --lift` + 前端 marker）|
+| 4 | 物件追蹤 + SemanticMap（持久語意地圖） | ✅ 完成（`snapshot --track`，byte-identical save/load）|
+| 5 | Scene Graph 與空間關係 | ✅ 完成（11 種關係 + RELATIONS 面板）|
+| 6 | Command 解析 + Grounding Resolver → NavigationGoal | ✅ 完成（10 種 intent，rule-based parser + LLM seam）|
+| 7 | Occupancy grid + A* path planning | ✅ 完成（8-conn、LOS smoothing、結構化失敗）|
+| 8 | Pure-pursuit controller + 運動學模型 | ✅ 完成（unicycle + PID + 離線模擬 + controller_trace）|
+| 9 | Active exploration | ✅ 完成（CoverageGrid + 4 種 ExplorationGoal）|
 | 10 | Evaluation + demo packaging | ⬜ 待實作 |
 | opt | Visual SLAM / OpenScene / RL / ROS 2 Nav2 | ⬜ optional 擴充 |
+
+**測試覆蓋：** 227 個測試全綠（每個 phase 自帶 unit + 整合 + server smoke），ruff check + format 全綠，vue-tsc clean。
 
 ---
 
