@@ -4,6 +4,7 @@ A single sensor frame plus everything downstream needs: image size, intrinsics,
 camera pose. Created at the camera-service boundary and threaded through
 depth + lifting.
 """
+
 from __future__ import annotations
 
 import math

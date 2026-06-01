@@ -16,6 +16,7 @@ coordinates, so the lifter applies the axis flip here. SLAM (optional §14.1)
 should publish its pose in graphics-world too, or this convention will need
 revisiting.
 """
+
 from __future__ import annotations
 
 import logging
@@ -216,9 +217,7 @@ class ObjectLifter:
         # Depth quality proxy: low when uncertainty is large relative to depth.
         depth_quality = float(np.clip(1.0 - depth_uncertainty / max(1e-3, median_depth), 0.0, 1.0))
         overall = float(
-            0.4 * candidate.detector_confidence
-            + 0.3 * candidate.mask_quality
-            + 0.3 * depth_quality
+            0.4 * candidate.detector_confidence + 0.3 * candidate.mask_quality + 0.3 * depth_quality
         )
 
         return ObjectState3D(
@@ -229,7 +228,11 @@ class ObjectLifter:
             mask_path=candidate.mask_path,
             center_2d=(float(u_c), float(v_c)),
             coordinate_frame=coord_frame,
-            center_3d_world=(float(center_world[0]), float(center_world[1]), float(center_world[2])),
+            center_3d_world=(
+                float(center_world[0]),
+                float(center_world[1]),
+                float(center_world[2]),
+            ),
             extent_3d=(float(extent_world[0]), float(extent_world[1]), float(extent_world[2])),
             median_depth=median_depth,
             depth_uncertainty=depth_uncertainty,

@@ -1,4 +1,5 @@
 """ObjectLifter: mask + depth + intrinsics → ObjectState3D. Spec §6."""
+
 from pathlib import Path
 
 import cv2
@@ -12,14 +13,18 @@ from src.spatial import (
 )
 
 
-def _write_circle_mask(path: Path, *, image_size: tuple[int, int], cx: int, cy: int, r: int) -> None:
+def _write_circle_mask(
+    path: Path, *, image_size: tuple[int, int], cx: int, cy: int, r: int
+) -> None:
     h, w = image_size
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.circle(mask, (cx, cy), r, 255, -1)
     cv2.imwrite(str(path), mask)
 
 
-def _make_candidate(mask_path: Path, *, bbox: tuple[float, float, float, float]) -> ObjectCandidate2D:
+def _make_candidate(
+    mask_path: Path, *, bbox: tuple[float, float, float, float]
+) -> ObjectCandidate2D:
     return ObjectCandidate2D(
         id="obj_test_001",
         label="cup",
@@ -56,7 +61,7 @@ def test_lift_constant_depth_centered(tmp_path: Path):
     assert abs(cy_w) < 0.01
     assert abs(cz_w - (-2.0)) < 0.01
     assert abs(obj.median_depth - 2.0) < 1e-3
-    assert obj.depth_uncertainty < 1e-3   # constant depth
+    assert obj.depth_uncertainty < 1e-3  # constant depth
     assert obj.coordinate_frame == "world"
 
 

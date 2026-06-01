@@ -1,4 +1,5 @@
 """CLI dispatch. Spec §3.3."""
+
 import pytest
 
 from src.cli import build_parser, main
@@ -7,8 +8,14 @@ from src.cli import build_parser, main
 def test_parser_accepts_all_spec_modes():
     p = build_parser()
     spec_modes = [
-        "sandbox", "snapshot", "demo", "replay",
-        "record", "eval", "openscene_static", "compare_backends",
+        "sandbox",
+        "snapshot",
+        "demo",
+        "replay",
+        "record",
+        "eval",
+        "openscene_static",
+        "compare_backends",
     ]
     for mode in spec_modes:
         args = p.parse_args(["--mode", mode])

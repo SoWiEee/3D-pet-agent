@@ -5,6 +5,7 @@ Phase 3 ships ``FixedPoseSource`` (camera at world origin, MVP) and
 extension in §14.1 — its slot is reserved here so the optional ORB-SLAM
 work later does not need to change call sites.
 """
+
 from __future__ import annotations
 
 import json
@@ -17,8 +18,7 @@ from .frame_packet import CameraPoseWorld
 class PoseSource(Protocol):
     """Anything that can answer ``what is the camera pose at this frame?``"""
 
-    def get(self, frame_id: int, timestamp: float | None = None) -> CameraPoseWorld:
-        ...
+    def get(self, frame_id: int, timestamp: float | None = None) -> CameraPoseWorld: ...
 
 
 class FixedPoseSource:

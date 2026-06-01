@@ -1,4 +1,5 @@
 """Video file reader. Yields BGR frames in order; supports basic seeking."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator

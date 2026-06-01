@@ -3,6 +3,7 @@
 Loading is deferred — first call to .predict() pulls weights. This keeps `import` fast
 and `--mode sandbox` runnable without any model download.
 """
+
 from __future__ import annotations
 
 import logging
@@ -20,6 +21,7 @@ log = logging.getLogger("pet_agent.detector")
 
 def _pick_device(requested: str) -> str:
     import torch
+
     if requested == "cuda" and not torch.cuda.is_available():
         log.warning("CUDA requested but unavailable; falling back to CPU")
         return "cpu"

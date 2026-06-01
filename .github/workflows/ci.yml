@@ -1,0 +1,78 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend · ruff + pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+
+      - name: Create venv + install (CPU torch wheels)
+        run: |
+          uv venv .venv
+          # Pull torch/torchvision from PyTorch's CPU index — the GPU wheels
+          # are not needed for unit tests and would explode the install size.
+          uv pip install --python .venv/bin/python \
+            --extra-index-url https://download.pytorch.org/whl/cpu \
+            -e ".[dev]"
+
+      - name: Ruff lint
+        run: .venv/bin/ruff check .
+
+      - name: Ruff format check
+        run: .venv/bin/ruff format --check .
+
+      - name: Pytest
+        env:
+          # Tests don't touch CUDA, but mask it explicitly so a stray
+          # ``torch.cuda.is_available()`` in import-time code is harmless.
+          CUDA_VISIBLE_DEVICES: ""
+          PET_AGENT_DEVICE: cpu
+        run: .venv/bin/pytest -q
+
+  frontend:
+    name: frontend · vue-tsc
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Type check (vue-tsc)
+        run: npx vue-tsc --noEmit
+
+      - name: Build
+        run: npm run build

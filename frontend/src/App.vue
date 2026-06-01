@@ -91,7 +91,8 @@ const modules = computed(() => [
   { name: "depth · anything v2", status: status.value === "open" ? "online" as const : "idle" as const, note: "monocular · depth-anything-v2-small" },
   { name: "tracker · iou+bytetrack", status: "off" as const, note: "phase 4" },
   { name: "scene graph", status: status.value === "open" ? "online" as const : "idle" as const, note: "phase 5 · 11 relations" },
-  { name: "command parser", status: "off" as const, note: "phase 6 · using rule fallback" },
+  { name: "command parser", status: status.value === "open" ? "online" as const : "idle" as const, note: "phase 6 · rule fallback · llm optional" },
+  { name: "grounding resolver", status: status.value === "open" ? "online" as const : "idle" as const, note: "phase 6 · semantic+attr+rel+vis+feas" },
 ]);
 
 function onCommand(payload: PetAction) {

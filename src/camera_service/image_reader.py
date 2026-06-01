@@ -1,4 +1,5 @@
 """Single-image input adapter for snapshot mode."""
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -2,6 +2,7 @@
 
 Takes BGR frames + detector boxes; returns binary masks aligned to the frame.
 """
+
 from __future__ import annotations
 
 import logging
@@ -17,6 +18,7 @@ log = logging.getLogger("pet_agent.segmenter")
 
 def _pick_device(requested: str) -> str:
     import torch
+
     if requested == "cuda" and not torch.cuda.is_available():
         log.warning("CUDA requested but unavailable; falling back to CPU")
         return "cpu"
@@ -55,7 +57,9 @@ class SamSegmenter:
         image = Image.fromarray(rgb)
         # SamProcessor expects input_boxes shape (batch=1, n_boxes, 4) in image coords.
         input_boxes = [[list(b) for b in boxes_xyxy]]
-        inputs = self._processor(image, input_boxes=input_boxes, return_tensors="pt").to(self.device)
+        inputs = self._processor(image, input_boxes=input_boxes, return_tensors="pt").to(
+            self.device
+        )
         with torch.inference_mode():
             outputs = self._model(**inputs)
         masks = self._processor.image_processor.post_process_masks(

@@ -4,6 +4,7 @@ Owns the canonical pet state on the backend and provides the action API from spe
 The frontend is a renderer of this state — every state change is broadcast as a
 PetAction event so the Three.js scene can react.
 """
+
 from __future__ import annotations
 
 import asyncio

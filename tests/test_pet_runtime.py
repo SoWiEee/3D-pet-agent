@@ -1,4 +1,5 @@
 """Pet runtime action API. Spec §4.3."""
+
 import asyncio
 import json
 
@@ -81,12 +82,14 @@ def test_move_follow_path_rejects_empty_path():
 
 def test_apply_dispatches_move_follow_path():
     rt = PetRuntime()
-    rt.apply({
-        "action": "move_follow_path",
-        "path": [[0.0, 0.0, 0.0], [0.3, 0.0, 0.6]],
-        "speed": 0.3,
-        "look_at_object_id": "cup_001",
-    })
+    rt.apply(
+        {
+            "action": "move_follow_path",
+            "path": [[0.0, 0.0, 0.0], [0.3, 0.0, 0.6]],
+            "speed": 0.3,
+            "look_at_object_id": "cup_001",
+        }
+    )
     assert rt.state.position.as_tuple() == (0.3, 0.0, 0.6)
     assert rt.state.speed == 0.3
 

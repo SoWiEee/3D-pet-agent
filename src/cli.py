@@ -3,6 +3,7 @@
 Phase 1–2 implement: sandbox, snapshot. Other modes are scaffolded to refuse cleanly
 with NotImplementedError so we can ship the live demo in phases.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -24,8 +25,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         required=True,
         choices=[
-            "sandbox", "snapshot", "demo", "replay",
-            "record", "eval", "openscene_static", "compare_backends",
+            "sandbox",
+            "snapshot",
+            "demo",
+            "replay",
+            "record",
+            "eval",
+            "openscene_static",
+            "compare_backends",
         ],
     )
     # Common
@@ -55,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--track",
         action="store_true",
         help="snapshot mode: also feed lifted objects through the Phase 4 tracker + SemanticMap "
-             "(writes runs/semantic_map_<image>.json)",
+        "(writes runs/semantic_map_<image>.json)",
     )
     p.add_argument(
         "--frames",
@@ -82,11 +89,13 @@ def _load_prompts(args: argparse.Namespace, cfg: AppConfig) -> list[str]:
             if line.strip()
         ]
     from .config import load_prompts
+
     cfg_dir = args.config_dir or Path(__file__).resolve().parent.parent / "configs"
     return load_prompts(cfg_dir)
 
 
 # ── modes ───────────────────────────────────────────────────────────────────
+
 
 def run_sandbox(args: argparse.Namespace, cfg: AppConfig) -> int:
     runtime = PetRuntime()
@@ -191,7 +200,10 @@ def run_snapshot(args: argparse.Namespace, cfg: AppConfig) -> int:
             log.info("wrote %s (%d objects)", map_json, len(smap.objects))
         log.info(
             "wrote %s (%d objects) + %s (%d lifted)",
-            out_json, len(result.objects_2d), lifted_json, len(lifted),
+            out_json,
+            len(result.objects_2d),
+            lifted_json,
+            len(lifted),
         )
         if cfg.runtime.runtime.save_debug_outputs:
             viz = pipeline.visualize(frame, result)
@@ -209,6 +221,7 @@ def run_snapshot(args: argparse.Namespace, cfg: AppConfig) -> int:
         viz = pipeline.visualize(frame, result)
         viz_path = args.out / f"snapshot_{args.image.stem}.png"
         from PIL import Image
+
         Image.fromarray(viz).save(viz_path)
         log.info("wrote %s", viz_path)
     return 0
@@ -218,6 +231,7 @@ def _serve(cfg: AppConfig) -> None:
     import uvicorn
 
     from .runtime.websocket_server import app
+
     log.info("serving on http://%s:%d", cfg.runtime.server.host, cfg.runtime.server.http_port)
     uvicorn.run(
         app,
@@ -239,6 +253,7 @@ def run_not_implemented(mode: str) -> int:
 
 
 # ── entrypoint ──────────────────────────────────────────────────────────────
+
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(

@@ -1,4 +1,5 @@
 """FramePacket + intrinsics math. Spec §3.1."""
+
 import json
 from pathlib import Path
 
@@ -56,8 +57,12 @@ def test_sim_pose_source_reads_jsonl(tmp_path: Path):
     jsonl.write_text(
         "\n".join(
             [
-                json.dumps({"frame_id": 0, "position": [0.0, 0.0, 0.0], "quaternion": [0, 0, 0, 1]}),
-                json.dumps({"frame_id": 5, "position": [1.2, 0.3, -0.4], "quaternion": [0, 0, 0, 1]}),
+                json.dumps(
+                    {"frame_id": 0, "position": [0.0, 0.0, 0.0], "quaternion": [0, 0, 0, 1]}
+                ),
+                json.dumps(
+                    {"frame_id": 5, "position": [1.2, 0.3, -0.4], "quaternion": [0, 0, 0, 1]}
+                ),
             ]
         ),
         encoding="utf-8",

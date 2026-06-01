@@ -1,4 +1,5 @@
 """Perception output schema. Spec §5.4."""
+
 import numpy as np
 
 from src.perception.schema import (

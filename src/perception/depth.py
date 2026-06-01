@@ -2,6 +2,7 @@
 
 Optional in Phase 2 — included so Phase 3 (3D lifting) can wire in without restructuring.
 """
+
 from __future__ import annotations
 
 import logging
@@ -17,6 +18,7 @@ log = logging.getLogger("pet_agent.depth")
 
 def _pick_device(requested: str) -> str:
     import torch
+
     if requested == "cuda" and not torch.cuda.is_available():
         return "cpu"
     return requested
@@ -34,7 +36,9 @@ class DepthAnythingV2:
             return
         from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 
-        log.info("loading Depth Anything V2 weights: %s (device=%s)", self.cfg.hf_model_id, self.device)
+        log.info(
+            "loading Depth Anything V2 weights: %s (device=%s)", self.cfg.hf_model_id, self.device
+        )
         self._processor = AutoImageProcessor.from_pretrained(self.cfg.hf_model_id)
         model = AutoModelForDepthEstimation.from_pretrained(self.cfg.hf_model_id).eval()
         try:
@@ -61,7 +65,12 @@ class DepthAnythingV2:
         predicted = outputs.predicted_depth  # (B, h', w') or (B, 1, h', w')
         if predicted.ndim == 3:
             predicted = predicted.unsqueeze(1)
-        depth = torch.nn.functional.interpolate(
-            predicted, size=(h, w), mode="bicubic", align_corners=False
-        )[0, 0].cpu().numpy().astype(np.float32)
+        depth = (
+            torch.nn.functional.interpolate(
+                predicted, size=(h, w), mode="bicubic", align_corners=False
+            )[0, 0]
+            .cpu()
+            .numpy()
+            .astype(np.float32)
+        )
         return depth

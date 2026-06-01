@@ -58,9 +58,24 @@ function submit() {
     text.value = "";
     return;
   }
-  // Default: treat the typed line as speech.
-  quick({ action: "ask", speech: text.value });
+  // Phase 6: hand any free-form natural-language input to the backend
+  // parser + grounding resolver. The server emits an `ask` with the
+  // explanation and (on success) a movement action, both of which arrive
+  // via the existing WebSocket stream.
+  void postCommand(text.value);
   text.value = "";
+}
+
+async function postCommand(t: string): Promise<void> {
+  try {
+    await fetch("/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: t }),
+    });
+  } catch (err) {
+    console.warn("command POST failed", err);
+  }
 }
 </script>
 
@@ -95,7 +110,7 @@ function submit() {
         type="text"
         autocomplete="off"
         spellcheck="false"
-        placeholder="move 0.5 0 1.2  ·  path 0 0 0 ; 0.3 0 0.5 ; 0.6 0 1.0  ·  anim sit  ·  emote curious  ·  say hello"
+        placeholder="go to the cup  ·  hide behind the keyboard but avoid the mouse  ·  look at the bowl  ·  stop"
       />
       <button type="submit">transmit</button>
     </form>

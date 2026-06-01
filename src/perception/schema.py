@@ -1,4 +1,5 @@
 """Perception data contracts. Spec §5.4 + a subset of §3.4 used in Phase 2."""
+
 from __future__ import annotations
 
 from typing import Any

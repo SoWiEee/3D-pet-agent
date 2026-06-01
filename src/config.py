@@ -3,6 +3,7 @@
 Spec §16. Settings use pydantic for validation; YAML is the canonical source of truth
 so non-developers can tune thresholds without touching code.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

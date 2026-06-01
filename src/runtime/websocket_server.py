@@ -13,6 +13,7 @@ POST /perception/lifted  — push a Phase 3 lifted result (center_3d_world per o
                            phosphor markers at each centroid.
 WS   /ws/pet             — stream PetAction events; client may also send actions back
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,6 +26,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from ..language import parse_command
+from ..planning import GroundingResolver
 from ..spatial import SceneGraphBuilder, SemanticMap
 from ..spatial.object_lifter import ObjectState3D
 from ..tracking import Tracker
@@ -33,12 +36,14 @@ from .pet_runtime import PetAction, PetRuntime
 log = logging.getLogger("pet_agent.ws")
 
 runtime = PetRuntime()
-# Server-held tracker + SemanticMap + SceneGraphBuilder. Phase 4–5 demo: clients
-# POST lifted JSON; the server tracks ids, fuses into the map, rebuilds the
-# scene graph, and broadcasts both to the renderer.
+# Server-held tracker + SemanticMap + SceneGraphBuilder + GroundingResolver.
+# Phase 4–6 demo: clients POST lifted JSON, the server tracks ids, fuses into
+# the map, rebuilds the scene graph, broadcasts both to the renderer; user
+# utterances POSTed to /command parse → ground → emit move_to + speech.
 tracker = Tracker()
 semantic_map = SemanticMap(map_id="live")
 scene_graph_builder = SceneGraphBuilder()
+grounding_resolver = GroundingResolver()
 
 
 @asynccontextmanager
@@ -181,6 +186,70 @@ async def reset_semantic_map() -> dict[str, Any]:
         PetAction(action="world_update", world_objects=[], scene_graph=None)
     )
     return {"reset": True}
+
+
+class CommandRequest(BaseModel):
+    text: str
+
+
+@app.post("/command")
+async def push_command(req: CommandRequest) -> dict[str, Any]:
+    """Phase 6: parse a user utterance and ground it against the live map.
+
+    On success, emits an ``ask`` (explanation in the speech bubble) and a
+    movement action. ``move_to`` for now — the Phase 7 planner will produce a
+    proper ``move_follow_path`` once the occupancy grid is in. On
+    clarification, only the ``ask`` is emitted so the user can refine.
+    """
+    intent = parse_command(req.text)
+    if intent is None:
+        runtime.ask(f"I didn't catch that: {req.text!r}")
+        return {"parsed": False, "reason": "unparseable"}
+
+    graph = scene_graph_builder.build(semantic_map)
+    result = grounding_resolver.resolve(intent, semantic_map, graph)
+    log.info(
+        "command: %r → intent=%s status=%s",
+        req.text,
+        intent.intent_type,
+        result.status,
+    )
+
+    if result.status == "clarification":
+        runtime.ask(result.explanation)
+        return {
+            "parsed": True,
+            "intent": intent.model_dump(),
+            "status": result.status,
+            "candidates": result.candidates,
+        }
+
+    if result.status == "empty_map":
+        runtime.ask(result.explanation)
+        return {"parsed": True, "intent": intent.model_dump(), "status": result.status}
+
+    if result.status == "no_match":
+        runtime.ask(result.explanation or "I don't see that.")
+        return {"parsed": True, "intent": intent.model_dump(), "status": result.status}
+
+    # success
+    goal = result.goal
+    assert goal is not None
+    runtime.ask(goal.explanation)
+    if intent.intent_type == "stop":
+        runtime.play_animation("sit")
+    elif intent.intent_type == "look_at" and goal.target_position_world is not None:
+        x, y, z = goal.target_position_world
+        runtime.look_at(x, y, z)
+    elif goal.target_position_world is not None:
+        x, y, z = goal.target_position_world
+        runtime.move_to(x, y, z, speed=0.6)
+    return {
+        "parsed": True,
+        "intent": intent.model_dump(),
+        "status": result.status,
+        "goal": goal.model_dump(),
+    }
 
 
 def _map_to_markers(m: SemanticMap) -> list[dict[str, Any]]:

@@ -2,6 +2,7 @@
 
 Per spec §5.3.
 """
+
 from __future__ import annotations
 
 import logging
@@ -32,9 +33,21 @@ log = logging.getLogger("pet_agent.perception")
 
 _PALETTE = np.array(
     [
-        [230, 25, 75], [60, 180, 75], [255, 225, 25], [0, 130, 200], [245, 130, 48],
-        [145, 30, 180], [70, 240, 240], [240, 50, 230], [210, 245, 60], [250, 190, 212],
-        [0, 128, 128], [220, 190, 255], [170, 110, 40], [255, 250, 200], [128, 0, 0],
+        [230, 25, 75],
+        [60, 180, 75],
+        [255, 225, 25],
+        [0, 130, 200],
+        [245, 130, 48],
+        [145, 30, 180],
+        [70, 240, 240],
+        [240, 50, 230],
+        [210, 245, 60],
+        [250, 190, 212],
+        [0, 128, 128],
+        [220, 190, 255],
+        [170, 110, 40],
+        [255, 250, 200],
+        [128, 0, 0],
     ],
     dtype=np.uint8,
 )
@@ -59,6 +72,7 @@ class PerceptionPipeline:
             self.depth = DepthAnythingV2(self.cfg.models.depth)
         if self.lifter is None:
             from ..spatial import ObjectLifter as _Lifter
+
             self.lifter = _Lifter()
 
     def run_frame(
@@ -131,7 +145,10 @@ class PerceptionPipeline:
         depth = self.depth.predict(frame_bgr)
         log.info(
             "frame %d: depth shape=%s range=[%.3f, %.3f]",
-            frame_id, depth.shape, float(depth.min()), float(depth.max()),
+            frame_id,
+            depth.shape,
+            float(depth.min()),
+            float(depth.max()),
         )
 
         intr = intrinsics or _CameraIntrinsics.from_fov(
@@ -139,9 +156,7 @@ class PerceptionPipeline:
         )
         pose = (pose_source or FixedPoseSource()).get(frame_id)
 
-        lifted = self.lifter.lift_many(
-            result.objects_2d, depth, intr, pose, frame_id=frame_id
-        )
+        lifted = self.lifter.lift_many(result.objects_2d, depth, intr, pose, frame_id=frame_id)
         log.info("frame %d: lifted %d / %d objects", frame_id, len(lifted), len(result.objects_2d))
         return result, depth, lifted
 
@@ -187,8 +202,14 @@ class PerceptionPipeline:
             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
             cv2.rectangle(canvas, (x1, max(0, y1 - th - 6)), (x1 + tw + 4, y1), color, -1)
             cv2.putText(
-                canvas, label, (x1 + 2, max(th, y1) - 4),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA,
+                canvas,
+                label,
+                (x1 + 2, max(th, y1) - 4),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
             )
             if obj.mask_path:
                 mask = cv2.imread(obj.mask_path, cv2.IMREAD_GRAYSCALE)

@@ -1,4 +1,5 @@
 """Top-level CLI entrypoint. See spec §3.3."""
+
 from __future__ import annotations
 
 import sys
