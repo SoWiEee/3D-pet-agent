@@ -14,6 +14,20 @@ function submit() {
   const v = text.value.trim().toLowerCase();
   if (!v) return;
 
+  // "path x1 y1 z1 ; x2 y2 z2 ; ..." — exercises move_follow_path.
+  const pathMatch = v.match(/^path\s+(.+)$/);
+  if (pathMatch) {
+    const waypoints = pathMatch[1].split(";").map((seg) => {
+      const parts = seg.trim().split(/\s+/).map(Number);
+      return parts.length === 3 ? (parts as [number, number, number]) : null;
+    }).filter((w): w is [number, number, number] => w !== null);
+    if (waypoints.length >= 2) {
+      quick({ action: "move_follow_path", path: waypoints, speed: 0.4 });
+      text.value = "";
+      return;
+    }
+  }
+
   // Tiny command shim (full grounding lives in Phase 6).
   // Patterns: "move x y z" | "look x y z" | "anim <name>" | "emote <name>" | "say <text>"
   const m = v.match(/^(move|look)\s+(-?\d*\.?\d+)\s+(-?\d*\.?\d+)\s+(-?\d*\.?\d+)$/);
@@ -57,6 +71,18 @@ function submit() {
       <div class="cmd__quick">
         <button @click="quick({ action: 'move_to', target_position_3d: [0.6, 0, 0.8] })">P1 · cup</button>
         <button @click="quick({ action: 'move_to', target_position_3d: [-0.5, 0, 1.0] })">P2 · keyboard</button>
+        <button
+          @click="quick({
+            action: 'move_follow_path',
+            path: [
+              [0.0, 0, 0.0],
+              [0.3, 0, 0.4],
+              [0.55, 0, 0.85],
+              [0.55, 0, 1.20],
+            ],
+            speed: 0.45,
+          })"
+        >path · A*</button>
         <button @click="quick({ action: 'play_animation', animation: 'sit' })">sit</button>
         <button @click="quick({ action: 'play_animation', animation: 'hide' })">hide</button>
         <button @click="quick({ action: 'set_emotion', emotion: 'curious' })">curious</button>
@@ -69,7 +95,7 @@ function submit() {
         type="text"
         autocomplete="off"
         spellcheck="false"
-        placeholder="move 0.5 0 1.2  ·  look -0.3 0.4 1.0  ·  anim sit  ·  emote curious  ·  say hello"
+        placeholder="move 0.5 0 1.2  ·  path 0 0 0 ; 0.3 0 0.5 ; 0.6 0 1.0  ·  anim sit  ·  emote curious  ·  say hello"
       />
       <button type="submit">transmit</button>
     </form>

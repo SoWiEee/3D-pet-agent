@@ -12,9 +12,20 @@ export interface PetState {
   updated_at: number;
 }
 
+export type Waypoint = [number, number, number];
+
 export interface PetAction {
-  action: "move_to" | "look_at" | "play_animation" | "set_emotion" | "ask" | "state";
-  target_position_3d?: [number, number, number] | null;
+  action:
+    | "move_to"
+    | "move_follow_path"
+    | "look_at"
+    | "play_animation"
+    | "set_emotion"
+    | "ask"
+    | "state";
+  target_position_3d?: Waypoint | null;
+  path?: Waypoint[] | null;
+  look_at_object_id?: string | null;
   animation?: string | null;
   emotion?: string | null;
   speed?: number | null;

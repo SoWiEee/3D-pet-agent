@@ -1,49 +1,72 @@
-# Software Design Document: `3d-pet-agent`
+# Software Design Document: `3d-pet-agent` (v2)
 
 > Iterative SDD. Each phase builds on the previous one. Implement in order.
 >
-> Project theme: A language-grounded full 3D computer pet, using mature vision models as perception backends and custom engineering layers for 3D scene graphs, spatial reasoning, behavior planning, and evaluation.
+> **Project theme.** A language-grounded, navigable 3D computer pet. The pet
+> perceives objects through a camera, maintains a persistent semantic map of
+> the scene, grounds natural-language commands into spatial targets, and
+> executes pet-like motion using occupancy-grid planning and a pure-pursuit
+> controller — rather than teleporting.
 >
-> Updated technical strategy: GroundingDINO + SAM/SAM 2 is the interactive mainline. OpenScene is an advanced research backend and comparison module.
+> **Technical positioning.** GroundingDINO + SAM/SAM 2 is the interactive
+> perception mainline. ORB-SLAM-style visual SLAM, OpenScene-style 3D semantic
+> querying, and RL-based exploration are *optional research extensions* — they
+> deepen the narrative and align with course topics but are never on the
+> critical path of the interactive demo.
+>
+> **Course alignment.** The phases align with a graduate "Robotic Navigation
+> and Exploration" syllabus — kinematic model, PID, pure pursuit, A* /
+> Dijkstra, occupancy grids, Bayes filtering, graph SLAM, 3D SLAM,
+> open-vocabulary detection and segmentation, VLM/LLM planning, and
+> preference-based RL all map to specific phases (see [Appendix A](#appendix-a-course-topic-mapping)).
+
+---
+
+## Changelog from v1
+
+v1 (preserved in git history before this commit) had 10 phases focused on
+perception → scene graph → behavior planner → OpenScene → eval. v2 keeps the
+perception backbone but promotes robotics-navigation modules to first-class
+mainline phases and demotes research backends to optional extensions.
+
+- **Phase order restructured** so navigation (occupancy + A*) and control
+  (pure pursuit + kinematic model) become first-class mainline phases, not a
+  single vague "behavior planner".
+- **`FramePacket`, `SemanticMap`, `NavigationGoal`** added as data contracts;
+  they were implicit in v1 and are now explicit.
+- **`PetAction` upgraded to path-following** (`move_follow_path` with a
+  `path[]` waypoint list). The legacy `move_to` action is retained for
+  direct manual commands.
+- **Visual SLAM, OpenScene, RL, ROS 2 Nav2 bridge** are tagged as
+  *optional* — each lives in `§14`, not in the main phase order.
+- **Coordinate-frame policy clarified**: `world` is the default but is
+  produced by a swappable `pose_source ∈ {fixed, sim, slam}`. Phase 3+
+  works under all three.
 
 ---
 
 ## Table of Contents
 
 1. [Project Overview](#1-project-overview)
-   - [1.1 Goal](#11-goal)
-   - [1.2 Scope](#12-scope)
-   - [1.3 Non-Goals](#13-non-goals)
-   - [1.4 Target Hardware](#14-target-hardware)
-   - [1.5 Technical Positioning](#15-technical-positioning)
-   - [1.6 Overall Execution Flow](#16-overall-execution-flow)
-2. [Model Feasibility Analysis](#2-model-feasibility-analysis)
-   - [2.1 GroundingDINO + SAM/SAM 2 Mainline](#21-groundingdino--samsam-2-mainline)
-   - [2.2 OpenScene Research Backend](#22-openscene-research-backend)
-   - [2.3 Practical Decision Matrix](#23-practical-decision-matrix)
-   - [2.4 Final Strategy](#24-final-strategy)
-3. [System Architecture](#3-system-architecture)
-   - [3.1 Dual-Backend Architecture](#31-dual-backend-architecture)
-   - [3.2 Core Modules](#32-core-modules)
-   - [3.3 Runtime Modes](#33-runtime-modes)
-   - [3.4 Data Contracts](#34-data-contracts)
-4. [Phase 1: 3D Pet Runtime and Scene Sandbox](#4-phase-1-3d-pet-runtime-and-scene-sandbox)
-5. [Phase 2: Interactive Mainline Perception](#5-phase-2-interactive-mainline-perception)
-6. [Phase 3: Depth Estimation and 3D Object Lifting](#6-phase-3-depth-estimation-and-3d-object-lifting)
-7. [Phase 4: Object Memory, Tracking, and Temporal Stability](#7-phase-4-object-memory-tracking-and-temporal-stability)
-8. [Phase 5: 3D Scene Graph and Spatial Relation Reasoning](#8-phase-5-3d-scene-graph-and-spatial-relation-reasoning)
-9. [Phase 6: Natural Language Command Parser and Grounding Resolver](#9-phase-6-natural-language-command-parser-and-grounding-resolver)
-10. [Phase 7: 3D Pet Behavior Planner](#10-phase-7-3d-pet-behavior-planner)
-11. [Phase 8: OpenScene Research Backend](#11-phase-8-openscene-research-backend)
-12. [Phase 9: Dual-Backend Comparison and Integration](#12-phase-9-dual-backend-comparison-and-integration)
-13. [Phase 10: Evaluation, Demo Protocol, and Report Assets](#13-phase-10-evaluation-demo-protocol-and-report-assets)
-14. [Repository Structure](#14-repository-structure)
-15. [Dependencies](#15-dependencies)
-16. [Configuration](#16-configuration)
-17. [Testing Strategy](#17-testing-strategy)
-18. [Risks & Notes](#18-risks--notes)
-19. [Recommended Development Schedule](#19-recommended-development-schedule)
-20. [References](#20-references)
+2. [Architecture](#2-architecture)
+3. [Data Contracts](#3-data-contracts)
+4. [Phase 1 — 3D Pet Runtime and Sandbox](#4-phase-1--3d-pet-runtime-and-sandbox)
+5. [Phase 2 — Open-Vocabulary Perception](#5-phase-2--open-vocabulary-perception)
+6. [Phase 3 — Depth Lifting and FramePacket](#6-phase-3--depth-lifting-and-framepacket)
+7. [Phase 4 — Object Tracking and SemanticMap](#7-phase-4--object-tracking-and-semanticmap)
+8. [Phase 5 — Scene Graph and Spatial Relations](#8-phase-5--scene-graph-and-spatial-relations)
+9. [Phase 6 — Command Parsing and Grounding Resolver](#9-phase-6--command-parsing-and-grounding-resolver)
+10. [Phase 7 — Occupancy Grid and A\* Path Planning](#10-phase-7--occupancy-grid-and-a-path-planning)
+11. [Phase 8 — Pure-Pursuit Controller and Path Following](#11-phase-8--pure-pursuit-controller-and-path-following)
+12. [Phase 9 — Active Exploration](#12-phase-9--active-exploration)
+13. [Phase 10 — Evaluation and Demo Packaging](#13-phase-10--evaluation-and-demo-packaging)
+14. [Optional Extensions](#14-optional-extensions)
+15. [Configuration](#15-configuration)
+16. [Testing Strategy](#16-testing-strategy)
+17. [Risks and Cut Rules](#17-risks-and-cut-rules)
+18. [Recommended Development Schedule](#18-recommended-development-schedule)
+19. [Appendix A — Course Topic Mapping](#appendix-a-course-topic-mapping)
+20. [Appendix B — Reference Models and Frameworks](#appendix-b-reference-models-and-frameworks)
 
 ---
 
@@ -51,13 +74,12 @@
 
 ### 1.1 Goal
 
-Build a complete 3D computer pet system named `3d-pet-agent`.
-
-The system receives live RGB or RGB-D input and natural language commands, identifies objects in the real environment, estimates their 3D positions, builds an object-centric 3D scene graph, resolves commands such as "walk behind the red cup" or "hide between the keyboard and the box", and drives a 3D cat avatar to perform grounded spatial behaviors.
-
-The final demo should show a virtual 3D cat interacting with a real desk or small room scene through a 3D renderer or browser-based overlay.
-
-Primary user-facing examples:
+Build a 3D embodied pet system named `3d-pet-agent`. The system takes live RGB
+or RGB-D input plus natural-language commands, identifies objects in the real
+environment, lifts them to a persistent 3D semantic map, grounds commands such
+as "walk behind the red cup" or "hide between the keyboard and the box", plans
+a feasible path, and drives a 3D cat avatar to follow that path with smooth
+control.
 
 ```text
 Go to the right side of the red cup.
@@ -66,344 +88,293 @@ Do not get close to the water bottle.
 Look at the object I just placed on the table.
 Find a safe place between the mouse and the box.
 Which object are you looking at?
+Explore the desk and tell me what you found.
 ```
 
-Core technical contribution:
+Core engineering claim:
 
 ```text
-Convert open-vocabulary perception outputs into a stable 3D world model,
-then ground natural language commands into executable pet behaviors.
+Convert open-vocabulary perception outputs into a persistent, queryable
+semantic map, then use language-conditioned grounding, navigation planning,
+and pure-pursuit control to drive an embodied 3D pet agent.
 ```
 
 ### 1.2 Scope
 
-The project focuses on five engineering problems:
+The project focuses on seven engineering problems:
 
 1. Open-vocabulary visual grounding from text prompts.
 2. Instance-level segmentation for object masks.
 3. 3D lifting from masks and depth.
-4. Object-centric 3D scene graph construction.
-5. Language-conditioned pet behavior planning.
+4. Persistent semantic map with object identity across frames.
+5. Object-centric scene graph with spatial relations.
+6. Occupancy-grid-based path planning.
+7. Smooth pet motion via pure pursuit + kinematic constraints.
 
-The project also includes a research extension:
+Optional research extensions (each in its own appendix section, not blocking
+the demo):
 
 ```text
-OpenScene-style open-vocabulary 3D scene understanding as a comparison backend.
+Visual SLAM (ORB-SLAM2/3, RGB-D odometry)
+OpenScene-style open-vocabulary 3D scene understanding
+RL-based exploration policy
+ROS 2 Nav2 bridge (for physical-robot extensions)
 ```
 
 ### 1.3 Non-Goals
 
-The project does not train a large vision-language foundation model from scratch.
+The project does **not**:
 
-The project does not promise centimeter-level metric reconstruction when only monocular depth is available.
-
-The project does not attempt physical robot control during the first complete version.
-
-The project does not call an LLM every frame. Language parsing happens on user command events, while perception and tracking run as separate loops.
-
-The project does not make OpenScene the first implementation backbone. OpenScene is an advanced research backend after the interactive mainline works.
+- Train a foundation vision-language model from scratch.
+- Promise centimeter-level metric reconstruction with monocular depth alone.
+- Build a physical robot as the primary deliverable.
+- Make OpenScene the first or only perception backbone.
+- Call an LLM every frame. Language parsing is event-driven on user commands;
+  perception, tracking, and control run as independent loops at their own
+  rates.
+- Use RL as the default controller. RL is restricted to *exploration policy*
+  in the optional track; planning + control remain classical.
 
 ### 1.4 Target Hardware
 
 | Component | Target |
 |---|---|
-| GPU | NVIDIA GeForce RTX 4070, 12282 MiB VRAM, driver 580.159.04 |
-| CPU | Intel Core i7-10700 @ 2.90GHz, 8 cores / 16 threads |
-| RAM | 64GB system RAM available on the current development machine; 32GB remains the recommended practical minimum |
-| Camera | Webcam, phone camera stream, or optional RGB-D camera |
-| OS | Linux / Ubuntu as the primary development target; Windows WSL2 acceptable with CUDA caveats |
-| Renderer | Three.js, Unity, or Godot |
-| Backend | Python service with WebSocket or HTTP API |
+| GPU | NVIDIA RTX 4070 (12 GB VRAM) — sized for `grounding-dino-tiny` + `sam-vit-base` + Depth Anything V2 Small running concurrently |
+| CPU | Intel Core i7-10700, 8 cores / 16 threads |
+| RAM | 32 GB recommended |
+| Camera | Webcam, phone stream, or optional RGB-D |
+| OS | Linux primary; Windows via WSL2 secondary |
+| Renderer | Three.js in browser (Vue 3 + Vite + TS) |
+| Backend | Python + FastAPI + WebSocket |
 
-The current Linux development machine is strong enough for local interactive inference with object detection, segmentation, depth estimation, tracking, and lightweight 3D rendering. The RTX 4070 has about 12GB of VRAM, so the implementation should still use model-size controls, mixed precision where possible, frame-rate throttling, and backend update scheduling instead of loading every large model at full resolution simultaneously. This hardware is not a realistic target for training a new large-scale 3D vision-language foundation model.
+VRAM budget assumes mixed-precision where the model supports it, with
+GroundingDINO running fp32 (deformable attention internally mixes dtypes — see
+§17.1).
 
 ### 1.5 Technical Positioning
 
-This project should be presented as a system engineering project with AI perception modules, not as a pure model training project.
-
-A weak version would be:
-
-```text
-GroundingDINO -> SAM -> Depth model -> Cat moves
-```
-
-A strong version is:
+The project should be presented as **systems engineering for an embodied
+agent**, not as a model-training paper.
 
 ```text
 Open-vocabulary perception
--> instance masks
--> uncertainty-aware 3D object lifting
--> object memory
--> 3D scene graph
--> relation scoring
--> command parsing
--> grounding resolver
--> behavior planner
--> clarification and failure handling
--> quantitative evaluation
+  → instance masks
+  → uncertainty-aware 3D object lifting
+  → persistent semantic map  (Phase 4)
+  → scene graph + relations  (Phase 5)
+  → command grounding        (Phase 6)
+  → A* path planning         (Phase 7) ← classical robotics
+  → pure-pursuit control     (Phase 8) ← classical robotics
+  → active exploration       (Phase 9)
+  → quantitative evaluation  (Phase 10)
 ```
 
-The engineering depth comes from the middle layers: state schemas, uncertainty handling, spatial relation scoring, temporal memory, behavior planning, and evaluation.
+Phases 7–8 are where the *robotics-navigation* identity of the project lives;
+Phases 4–6 are where the *language-grounded perception* identity lives.
 
 ### 1.6 Overall Execution Flow
 
 ```mermaid
 flowchart TD
-  A[Start 3d-pet-agent] --> B[Initialize camera, model services, and 3D renderer]
+  A[Start 3d-pet-agent] --> B[Init camera, model services, renderer]
   B --> C{Runtime mode}
 
-  C -->|Interactive Mainline| D[GroundingDINO-style detector]
-  D --> E[SAM or SAM 2 segmentation]
-  E --> F[Depth estimation or RGB-D depth]
-  F --> G[3D object lifting]
-  G --> H[Object memory and tracking]
-  H --> I[3D scene graph]
+  C -->|Mainline perception| D[GroundingDINO]
+  D --> E[SAM / SAM 2]
+  E --> F[Depth Anything V2 or RGB-D]
+  F --> G[Object lifter — FramePacket-aware]
+  G --> H[Object tracker + SemanticMap]
+  H --> I[Scene graph + relations]
 
-  C -->|Research Backend| R[Load RGB-D / point cloud scene]
-  R --> S[OpenScene-style 3D open-vocabulary query]
-  S --> T[3D semantic query result]
-  T --> I
+  C -.optional.-> RB[OpenScene research backend]
+  RB -.-> I
 
-  I --> J{User command available?}
-  J -->|No| K[Pet idle or curiosity behavior]
-  J -->|Yes| L[Parse command]
-  L --> M[Resolve target object or target region]
+  I --> J{User command?}
+  J -->|No| K[Pet idle / curiosity / active exploration]
+  J -->|Yes| L[Command parser → CommandIntent]
+  L --> M[Grounding resolver → NavigationGoal]
   M --> N{Grounding confident?}
-  N -->|Yes| O[Plan pet behavior]
-  N -->|No| P[Ask clarification or fallback]
-  O --> Q[Animate 3D cat]
-  P --> Q
+  N -->|No| Ask[Clarification dialog]
+  N -->|Yes| P[A* planner over occupancy grid]
+  P --> Ctrl[Pure-pursuit controller]
+  Ctrl --> Q[3D cat runtime — path-following animation]
   K --> Q
+  Ask --> Q
   Q --> D
 ```
 
 ---
 
-## 2. Model Feasibility Analysis
+## 2. Architecture
 
-### 2.1 GroundingDINO + SAM/SAM 2 Mainline
-
-#### Concept
-
-GroundingDINO provides text-conditioned open-vocabulary object detection. SAM or SAM 2 converts detected boxes or prompts into instance masks. The system then uses depth estimation or RGB-D depth to lift object masks into approximate 3D object states.
+### 2.1 Layered View
 
 ```text
-RGB frame
--> text-conditioned object detection
--> promptable instance segmentation
--> depth estimation
--> mask-level 3D projection
--> object-centric 3D scene graph
--> pet behavior
+Layer 1: Input               webcam / video / RGB-D / sim sensor
+Layer 2: Perception          GroundingDINO · SAM/SAM 2 · Depth Anything V2
+Layer 3: Localization & Map  pose source (fixed / sim / SLAM)
+                             object lifter · tracker · SemanticMap
+Layer 4: Scene understanding scene graph · spatial relations · navigable region
+Layer 5: Language & Planning command parser · grounding resolver · clarification
+Layer 6: Navigation          occupancy grid · A* planner · NavigationGoal
+Layer 7: Control             kinematic model · pure pursuit · PID smoothing
+Layer 8: Pet Runtime         3D cat · animations · emotions · speech overlay
+Layer 9: Evaluation          metrics · replay · failure cases · reports
 ```
 
-#### Why it is feasible
+Layers 6–7 are the navigation + control stack newly promoted in v2. Layer 3
+gains an explicit "pose source" abstraction so `fixed` (camera at origin),
+`sim` (simulator-provided pose), and `slam` (ORB-SLAM) are interchangeable.
 
-GroundingDINO is designed for open-set object detection and can detect arbitrary objects from human inputs such as category names or referring expressions. This directly matches commands like "red cup", "keyboard", or "object next to the mouse".
-
-SAM is a promptable segmentation model that can produce masks from prompts such as boxes or points, which makes it a natural pair with a detector. SAM 2 extends promptable segmentation to both images and videos and includes streaming memory for video processing.
-
-#### Strengths
-
-| Area | Advantage |
-|---|---|
-| Demo feasibility | Fastest path to an interactive 3D pet demo |
-| Debuggability | Intermediate outputs are visible as boxes, masks, depth maps, and object states |
-| Modularity | Detection, segmentation, depth, tracking, graph reasoning, and planning can be developed independently |
-| Hardware fit | Can be made practical on RTX 4070 12GB with update-rate control |
-| Natural language grounding | Good for object names and referring expressions |
-| Engineering depth | Leaves room for custom 3D lifting, scene graph, uncertainty, and planner layers |
-| Video support | SAM 2 can support temporal segmentation and reduce mask flicker |
-
-#### Weaknesses
-
-| Area | Limitation |
-|---|---|
-| 3D native ability | The detector and segmenter operate primarily in 2D |
-| Metric scale | Monocular depth is usually approximate without calibration |
-| Spatial relations | Relations such as `behind`, `between`, and `safe region` must be implemented manually |
-| Object identity | Object IDs may flicker across frames without tracking |
-| Occlusion | Partial occlusion can degrade masks and depth statistics |
-| Transparent objects | Cups, bottles, and reflective surfaces can produce unstable depth |
-
-#### Project-owned engineering layers
-
-This mainline becomes technically strong only if the following layers are implemented by the project:
-
-```text
-ObjectState schema
-Depth statistics and uncertainty
-Mask-to-point-cloud lifting
-Temporal object memory
-Scene graph edges
-Spatial relation scorers
-Target region generation
-Behavior planning
-Failure recovery
-Evaluation dataset
-```
-
-### 2.2 OpenScene Research Backend
-
-#### Concept
-
-OpenScene-style systems map 3D scene points into a CLIP-aligned feature space. Text queries can score dense 3D points or regions directly.
-
-```text
-RGB-D frames / point cloud / reconstructed 3D scene
--> 3D point feature extraction
--> CLIP-aligned 3D feature space
--> open-vocabulary text query
--> 3D semantic relevancy map
--> object or region selection
-```
-
-#### Why it is valuable
-
-OpenScene is closer to true open-vocabulary 3D scene understanding. Its central idea is to predict dense features for 3D scene points that are co-embedded with text and image pixels in CLIP feature space. This enables zero-shot and task-agnostic open-vocabulary queries over 3D scenes.
-
-#### Strengths
-
-| Area | Advantage |
-|---|---|
-| Research depth | Stronger alignment with modern 3D vision-language research |
-| 3D-native representation | Text queries operate over 3D points rather than 2D boxes |
-| Semantic heatmaps | Can return dense 3D relevance scores |
-| Proposal quality | Good for explaining multimodal embeddings and 3D scene understanding |
-| Comparison value | Useful as a second backend to compare against the object-centric pipeline |
-
-#### Weaknesses
-
-| Area | Limitation |
-|---|---|
-| Setup cost | Requires 3D data, point clouds, RGB-D frames, camera poses, or reconstruction |
-| Live interaction | Harder to use as the real-time backbone for a pet agent |
-| Debug complexity | Failures can come from pose, reconstruction, feature fusion, or text alignment |
-| Runtime integration | Still needs object clustering, scene graph conversion, and behavior planning |
-| Dataset assumptions | Many 3D scene methods are tested on indoor datasets, while this project uses arbitrary desk scenes |
-| Schedule risk | High chance of spending too much time on preprocessing and environment issues |
-
-### 2.3 Practical Decision Matrix
-
-| Criterion | GroundingDINO + SAM/SAM 2 + Depth | OpenScene-style 3D Backend |
-|---|---:|---:|
-| Summer feasibility | High | Medium to Low |
-| Live interaction | High | Low to Medium |
-| 3D research depth | Medium | High |
-| Engineering controllability | High | Medium to Low |
-| Debuggability | High | Medium to Low |
-| RTX 4070 suitability | High | Medium |
-| Webcam compatibility | High | Low |
-| RGB-D / point cloud requirement | Optional | Usually required |
-| Scene graph integration | High | Medium |
-| Best role | Mainline backend | Research backend |
-
-### 2.4 Final Strategy
-
-The project uses a hybrid plan:
-
-```text
-Fast Interactive Mode:
-  GroundingDINO + SAM/SAM 2 + depth lifting + object-centric scene graph
-
-Research 3D Semantic Mode:
-  OpenScene-style backend for static or recorded 3D scenes
-
-Comparison Mode:
-  Evaluate both backends on query flexibility, latency, setup cost, and grounding success
-```
-
-This lets the project learn many areas without sacrificing the chance of a complete demo.
-
----
-
-## 3. System Architecture
-
-### 3.1 Dual-Backend Architecture
+### 2.2 Dual-Backend Architecture
 
 ```mermaid
 flowchart LR
   U[User command] --> CP[Command Parser]
   CP --> GR[Grounding Resolver]
 
-  CAM[Camera / Video] --> MB[Mainline Backend]
-  MB --> M1[GroundingDINO-style Detection]
-  M1 --> M2[SAM/SAM 2 Segmentation]
+  CAM[Camera / Video] --> MB[Mainline Perception Backend]
+  MB --> M1[GroundingDINO]
+  M1 --> M2[SAM / SAM 2]
   M2 --> M3[Depth + 3D Lifting]
-  M3 --> OSG[Object-centric Scene Graph]
+  M3 --> SM[SemanticMap]
 
-  DATA[RGB-D / Point Cloud Scene] --> RB[Research Backend]
-  RB --> R1[OpenScene-style 3D Query]
-  R1 --> R2[3D Semantic Result]
-  R2 --> OSG
+  DATA[RGB-D / Point Cloud] -.optional.-> RB[Research: OpenScene]
+  RB -.-> SM
 
+  SM --> OSG[Scene Graph + Relations]
   OSG --> GR
-  GR --> BP[Behavior Planner]
-  BP --> PET[3D Cat Runtime]
+  GR --> NG[NavigationGoal]
+  NG --> PL[A* Planner]
+  PL --> CT[Pure-Pursuit Controller]
+  CT --> PET[3D Cat Runtime]
 ```
 
-### 3.2 Core Modules
+### 2.3 Module Responsibilities
 
-| Module | Responsibility |
-|---|---|
-| `camera_service` | Capture RGB frames from webcam, phone stream, video, or image |
-| `detector_service` | Run text-conditioned object detection |
-| `segmenter_service` | Produce instance masks from boxes or prompts |
-| `depth_service` | Produce depth map from monocular model or RGB-D camera |
-| `object_lifter` | Convert 2D masks and depth into 3D object states |
-| `tracker_service` | Maintain object identity across frames |
-| `scene_graph` | Store objects, attributes, relations, uncertainty, and history |
-| `command_parser` | Convert natural language commands into structured intent |
-| `grounding_resolver` | Match parsed command to object or target region |
-| `behavior_planner` | Convert resolved target into pet actions |
-| `pet_runtime` | Render and animate the 3D cat |
-| `openscene_backend` | Optional static-scene open-vocabulary 3D query backend |
-| `backend_compare` | Compare mainline and research backend outputs |
-| `evaluation` | Measure grounding accuracy, relation accuracy, task success, and latency |
-
-### 3.3 Runtime Modes
-
-| Mode | Description | Purpose |
+| Module | Layer | Responsibility |
 |---|---|---|
-| `sandbox` | 3D pet runtime without perception | Validate pet movement and animations |
-| `snapshot` | Run perception and grounding on one image | Unit test perception and resolver |
-| `demo` | Live camera plus live pet runtime | Final interactive demo |
-| `replay` | Run pipeline on recorded video | Reproducible debugging |
-| `record` | Save frames, masks, object states, and commands | Dataset collection |
-| `eval` | Run benchmark commands on recorded scenes | Quantitative evaluation |
-| `openscene_static` | Run OpenScene-style query on prepared 3D data | Research backend demo |
-| `compare_backends` | Compare mainline result against research backend | Technical analysis |
+| `camera_service` | 1 | Capture RGB(-D) frames; emit FramePackets |
+| `perception/detector` | 2 | GroundingDINO open-vocabulary boxes |
+| `perception/segmenter` | 2 | SAM/SAM 2 instance masks |
+| `perception/depth` | 2 | Monocular or RGB-D depth |
+| `perception/pipeline` | 2 | Orchestrator: detector → segmenter → ObjectCandidate2D |
+| `spatial/pose_source` | 3 | Provide camera pose (fixed / sim / slam) |
+| `spatial/object_lifter` | 3 | 2D mask + depth + pose → 3D ObjectState |
+| `tracking/tracker` | 3 | Cross-frame object identity (IoU → ByteTrack) |
+| `spatial/semantic_map` | 3 | Persistent ObjectState fusion + occupancy slice |
+| `spatial/scene_graph` | 4 | Object relations: left/right/front/behind/near/between |
+| `language/command_parser` | 5 | NL → CommandIntent (rule fallback + optional LLM) |
+| `planning/grounding_resolver` | 5 | CommandIntent + SemanticMap → NavigationGoal |
+| `planning/occupancy_grid` | 6 | 2D occupancy from SemanticMap + obstacle padding |
+| `planning/astar` | 6 | A*/Dijkstra over occupancy grid |
+| `control/kinematic` | 7 | Cat motion model (speed/turn limits) |
+| `control/pure_pursuit` | 7 | Lookahead-based path tracking |
+| `control/pid` | 7 | Velocity smoothing |
+| `runtime/pet_runtime` | 8 | Authoritative PetState + action broadcast |
+| `runtime/websocket_server` | 8 | FastAPI app, /ws/pet, HTTP control surface |
+| `research/openscene_backend` | opt | 3D open-vocabulary query backend |
+| `research/rl_explorer` | opt | RL exploration policy |
+| `research/slam_adapter` | opt | ORB-SLAM2/3 wrapper |
+| `evaluation/*` | 9 | Datasets, metrics, replays, reports |
 
-Example CLI:
+### 2.4 Runtime Modes
+
+| Mode | Description | Required |
+|---|---|---|
+| `sandbox` | 3D pet runtime alone, no perception | ✓ (Phase 1) |
+| `snapshot` | Detection + segmentation on a single image | ✓ (Phase 2) |
+| `perception_debug` | Live perception, no behavior | ✓ (Phase 2–3) |
+| `demo` | Full mainline + path-following | ✓ (Phase 7–8) |
+| `replay` | Pipeline on recorded RGB(-D) + commands | ✓ (Phase 10) |
+| `eval` | Benchmark commands over recorded scenes | ✓ (Phase 10) |
+| `exploration` | Active exploration without target | recommended |
+| `openscene_static` | OpenScene query on prepared 3D scene | optional |
+| `compare_backends` | Mainline vs OpenScene on same query | optional |
+| `rl_exploration` | RL-driven exploration policy | optional |
+| `ros_bridge` | Export goals to ROS 2 Nav2 | optional |
+
+CLI examples:
 
 ```bash
 python main.py --mode sandbox
+python main.py --mode sandbox --target 0.5 0.0 1.2
+python main.py --mode sandbox --script samples/pet_actions.jsonl
 python main.py --mode snapshot --image samples/desk.jpg --command "go to the red cup"
-python main.py --mode demo --camera 0 --prompts configs/desk_prompts.txt
-python main.py --mode replay --video samples/desk_scene.mp4 --commands samples/commands.jsonl
+python main.py --mode demo --camera 0 --prompts configs/prompts.txt
+python main.py --mode replay --video samples/desk.mp4 --commands samples/commands.jsonl
+python main.py --mode eval --dataset eval/desk_queries.jsonl
 python main.py --mode openscene_static --scene data/scene_01 --query "chair"
-python main.py --mode compare_backends --dataset eval/desk_queries.jsonl
 ```
 
-### 3.4 Data Contracts
+### 2.5 Update Rates
 
-#### 3.4.1 `ObjectState`
+Per `configs/runtime.yaml`:
+
+| Loop | Rate |
+|---|---|
+| Perception (detector + segmenter + depth) | 2 Hz |
+| Tracking + SemanticMap fusion | 10 Hz |
+| Control (pure pursuit) | 30 Hz |
+| Renderer | 60 Hz |
+| Command parser | event-driven |
+
+These loops are independent — never block one on another. The renderer
+consumes the latest PetAction broadcast; the controller produces those
+broadcasts at its own rate based on the planned path.
+
+---
+
+## 3. Data Contracts
+
+All payloads use JSON. Schemas are validated by Pydantic on the Python side
+and TypeScript types on the frontend side. **These contracts are the stable
+interface between modules** — extend rather than replace.
+
+### 3.1 `FramePacket`
+
+A single sensor frame with everything needed for 3D reasoning.
 
 ```json
 {
-  "id": "cup_001",
-  "label": "cup",
+  "frame_id": 128,
+  "timestamp": 1710000000.123,
+  "rgb_path": "runs/session_001/frames/000128.png",
+  "depth_path": "runs/session_001/depth/000128.npy",
+  "image_size": [480, 640],
+  "camera_intrinsics": {
+    "fx": 615.0,
+    "fy": 615.0,
+    "cx": 320.0,
+    "cy": 240.0
+  },
+  "camera_pose_world": {
+    "available": true,
+    "source": "fixed",
+    "position": [0.0, 1.2, 0.4],
+    "quaternion": [0.0, 0.0, 0.0, 1.0]
+  }
+}
+```
+
+`camera_pose_world.source ∈ {fixed, sim, slam, manual}`. When
+`available: false`, downstream stages fall back to a camera-relative
+coordinate frame.
+
+### 3.2 `ObjectState`
+
+```json
+{
+  "object_id": "cup_001",
+  "class_label": "cup",
   "attributes": ["red", "small"],
   "bbox_xyxy": [412, 208, 522, 391],
   "mask_path": "runs/frame_0042/cup_001_mask.png",
   "center_2d": [467, 299],
-  "center_3d": [0.32, 0.05, 1.21],
-  "bbox_3d": {
-    "min": [0.25, -0.02, 1.12],
-    "max": [0.40, 0.16, 1.31]
-  },
-  "depth_median": 1.21,
-  "depth_iqr": 0.14,
+  "center_3d_world": [0.32, 0.05, 1.21],
+  "extent_3d": [0.15, 0.18, 0.19],
+  "median_depth": 1.21,
+  "depth_uncertainty": 0.14,
   "source_backend": "mainline_grounding_sam",
   "confidence": {
     "detector": 0.76,
@@ -412,17 +383,31 @@ python main.py --mode compare_backends --dataset eval/desk_queries.jsonl
     "tracking": 0.92,
     "overall": 0.78
   },
-  "last_seen_frame": 42
+  "last_seen_frame": 42,
+  "tracking_status": "tracked"
 }
 ```
 
-#### 3.4.2 `SceneGraph`
+Notes:
+
+- `center_3d_world` replaces v1's `center_3d`. When camera pose is not
+  available, downstream stages may write the camera-frame value and the field
+  is then interpreted as camera-relative (`coordinate_frame` is held at the
+  scene-graph / map level, not per-object).
+- `extent_3d` replaces v1's `bbox_3d.min/max` (oriented extent in metres, with
+  the same orientation convention as `center_3d_world`).
+- `depth_uncertainty` replaces v1's `depth_iqr`.
+- `tracking_status ∈ {tracked, occluded, stale, lost}`.
+- `source_backend ∈ {mainline_grounding_sam, openscene}` — the dual-backend
+  comparison (optional Phase) requires this tag.
+
+### 3.3 `SceneGraph`
 
 ```json
 {
   "timestamp": 1720000000.0,
   "frame_id": 42,
-  "coordinate_frame": "camera_relative",
+  "coordinate_frame": "world",
   "objects": ["cup_001", "keyboard_001", "mouse_001"],
   "relations": [
     {
@@ -439,76 +424,161 @@ python main.py --mode compare_backends --dataset eval/desk_queries.jsonl
 }
 ```
 
-#### 3.4.3 `CommandIntent`
+Relations: `left_of, right_of, in_front_of, behind, above, below, near,
+far_from, on_surface, occluding, between`.
+
+### 3.4 `SemanticMap` (new in v2)
+
+Aggregates `ObjectState`s over time and exposes a navigable view.
+
+```json
+{
+  "map_id": "session_001",
+  "coordinate_frame": "world",
+  "objects": ["cup_001", "keyboard_001", "mouse_001"],
+  "occupancy_grid": {
+    "resolution": 0.05,
+    "origin": [-2.0, -2.0],
+    "width": 80,
+    "height": 80,
+    "data_path": "runs/session_001/maps/occupancy.npy"
+  },
+  "navigable_regions": [
+    {
+      "region_id": "desk_surface_001",
+      "type": "surface",
+      "polygon": [[0.0, 0.0], [1.2, 0.0], [1.2, 0.8], [0.0, 0.8]]
+    }
+  ],
+  "last_updated": 1710000000.123
+}
+```
+
+The occupancy grid is derived (not authoritative) — Phase 7 rebuilds it from
+the live SemanticMap, inflated by `configs/navigation.yaml: obstacle_padding`.
+
+### 3.5 `CommandIntent`
 
 ```json
 {
   "raw_text": "hide behind the red cup but avoid the mouse",
-  "intent": "hide",
+  "intent_type": "hide",
   "target": {
-    "class": "cup",
+    "class_label": "cup",
     "attributes": ["red"]
   },
-  "relation": {
+  "spatial_relation": {
     "type": "behind",
     "anchor": "target"
   },
   "constraints": [
     {
       "type": "avoid",
-      "class": "mouse"
+      "object": { "class_label": "mouse" },
+      "min_distance": 0.25
     }
-  ]
+  ],
+  "fallback": "ask_clarification"
 }
 ```
 
-#### 3.4.4 `GroundingResult`
+`intent_type ∈ {move_to, hide, look_at, follow, avoid, search, inspect,
+explore, report, stop}`.
+
+### 3.6 `NavigationGoal` (new in v2)
+
+The output of the grounding resolver; the input to the planner.
 
 ```json
 {
-  "status": "grounded",
-  "target_object_id": "cup_001",
-  "target_region_3d": [0.42, 0.00, 1.38],
-  "score_breakdown": {
-    "semantic_match": 0.92,
-    "attribute_match": 0.83,
-    "relation_match": 0.77,
-    "spatial_feasibility": 0.71,
-    "perception_confidence": 0.78
-  },
-  "final_score": 0.81,
-  "explanation": "Selected cup_001 because it is detected as a red cup and the target region behind it is not blocked."
+  "goal_id": "goal_001",
+  "goal_type": "pose",
+  "target_position_world": [0.55, 0.72, 1.10],
+  "target_orientation_hint": "face_user",
+  "constraints": [
+    { "type": "avoid_object", "object_id": "mouse_001", "min_distance": 0.25 },
+    { "type": "stay_on_surface", "region_id": "desk_surface_001" }
+  ],
+  "source_command": "hide behind the red cup but avoid the mouse",
+  "explanation": "Behind cup_001 at (0.55, 0.72, 1.10), keeping ≥ 0.25 m from mouse_001."
 }
 ```
 
-#### 3.4.5 `PetAction`
+`goal_type ∈ {pose, region, follow, viewpoint}`.
+
+### 3.7 `PetAction` (upgraded in v2 — path-following)
+
+Two coexisting movement actions:
+
+- `move_to` — direct manual command (used by sandbox, debug CLI, quick
+  buttons). Backend animates with a simple tween.
+- `move_follow_path` — produced by the controller when following a planned
+  path. The frontend interpolates along the waypoint list at the given speed,
+  with smooth heading.
 
 ```json
 {
-  "action": "move_to",
-  "target_position_3d": [0.42, 0.00, 1.38],
+  "action_id": "action_001",
+  "action": "move_follow_path",
+  "path": [
+    [0.10, 0.00, 0.30],
+    [0.22, 0.00, 0.55],
+    [0.41, 0.00, 0.80],
+    [0.55, 0.00, 1.10]
+  ],
+  "target_position_3d": [0.55, 0.00, 1.10],
   "look_at_object_id": "cup_001",
   "animation": "walk",
-  "speed": 0.8,
+  "speed": 0.35,
+  "emotion": "curious",
+  "speech": "I will hide behind the cup.",
   "constraints": ["avoid_mouse_001"],
-  "fallback": "ask_clarification"
+  "fallback": "ask_clarification",
+  "timestamp": 1720000000.5
+}
+```
+
+Other actions stay as in v1: `look_at`, `play_animation`, `set_emotion`,
+`ask`, `state`.
+
+### 3.8 `EvaluationRecord`
+
+```json
+{
+  "trial_id": "trial_023",
+  "scene_id": "desk_005",
+  "command": "go to the red cup",
+  "expected_target": "cup_red_001",
+  "predicted_target": "cup_red_001",
+  "grounding_success": true,
+  "path_success": true,
+  "collision_count": 0,
+  "task_success": true,
+  "latency_ms": 742,
+  "controller_metrics": {
+    "max_cross_track_error_m": 0.04,
+    "max_heading_error_rad": 0.18
+  },
+  "notes": "Depth uncertainty low; clean mask."
 }
 ```
 
 ---
 
-## 4. Phase 1: 3D Pet Runtime and Scene Sandbox
+## 4. Phase 1 — 3D Pet Runtime and Sandbox
 
 ### 4.1 Requirements
 
-- Create a 3D cat avatar runtime.
-- Support a placeholder cat model first, then replace it with a rigged cat model.
-- Support basic actions: `idle`, `walk`, `look_at`, `sit`, `hide`, `curious`, `confused`.
-- Support command-driven movement to manually supplied 3D coordinates.
-- Render debug axes, floor grid, target points, and object markers.
-- Expose a backend API for pet actions.
+- Render a placeholder 3D cat avatar (ceramic-pearl, capsule + head + ears +
+  legs + tail).
+- Support basic actions: `idle`, `walk`, `run`, `look_at`, `sit`, `hide`,
+  `curious`, `confused`.
+- Support both `move_to` (direct) and `move_follow_path` (path-following).
+- Render debug helpers: world axes, floor grid, target marker, registration
+  crosshairs, scanlines, registration glyph at origin.
+- Expose the action API as both Python (`PetRuntime`) and HTTP/WS (FastAPI).
 
-### 4.2 CLI Interface
+### 4.2 CLI
 
 ```bash
 python main.py --mode sandbox
@@ -519,866 +589,436 @@ python main.py --mode sandbox --script samples/pet_actions.jsonl
 ### 4.3 Runtime API
 
 ```python
-pet.move_to(x: float, y: float, z: float) -> None
-pet.look_at(x: float, y: float, z: float) -> None
-pet.play_animation(name: str) -> None
-pet.set_emotion(name: str) -> None
-pet.ask(text: str) -> None
+pet.move_to(x, y, z, speed=None)
+pet.move_follow_path(path, speed=None, look_at_object_id=None)
+pet.look_at(x, y, z)
+pet.play_animation(name)
+pet.set_emotion(name)
+pet.ask(text)
 ```
 
-### 4.4 Logic Flow
+### 4.4 Acceptance Criteria
 
-```text
-initialize renderer
-load cat model
-load empty scene
-render world axes and floor grid
-if target coordinate specified:
-    move cat to target
-else:
-    play idle animation
-show current state in debug panel
-```
+- Cat renders and is controllable from Python and from the browser command
+  bar.
+- `move_to` reaches the target with a smooth tween.
+- `move_follow_path` traverses the waypoint list without teleport; heading
+  faces the active segment.
+- Pet state is broadcast to all WebSocket subscribers.
 
-### 4.5 Acceptance Criteria
+### 4.5 Status — ✅ Complete
 
-- The cat can be rendered and controlled in a 3D scene.
-- The cat can move to a specified coordinate.
-- The cat can look at a specified point.
-- The runtime can receive action commands from Python.
-- The renderer can display debug markers for target points.
+Implemented in `src/runtime/`, `frontend/src/renderer/PetScene.ts`. v2 adds
+`move_follow_path` to both layers.
 
 ---
 
-## 5. Phase 2: Interactive Mainline Perception
+## 5. Phase 2 — Open-Vocabulary Perception
 
 ### 5.1 Requirements
 
-- Capture live RGB frames from webcam or load frames from file.
-- Detect objects using text prompts.
-- Segment detected object instances.
-- Save per-frame detection and mask outputs for debugging.
-- Support a default prompt vocabulary for desk and room scenes.
-- Run the perception pipeline independently from the pet runtime.
+- Capture RGB frames from webcam / video / single image.
+- Detect objects via text prompts (GroundingDINO).
+- Segment detected instances (SAM / SAM 2).
+- Persist per-frame outputs for debugging.
+- Run independently from the pet runtime (separate loop, 2 Hz).
 
 ### 5.2 Default Prompt Vocabulary
 
 ```text
-cup, bottle, keyboard, mouse, laptop, phone, book, box, chair, table, person, hand, cable, pen, notebook, bag, monitor, speaker, plant, toy
+cup, bottle, keyboard, mouse, laptop, phone, book, box, chair, table,
+person, hand, cable, pen, notebook, bag, monitor, speaker, plant, toy
 ```
 
-### 5.3 Detection and Segmentation Logic
+### 5.3 Output
 
-```text
-frame = camera.read()
-prompts = load_prompt_set()
-boxes = detector.predict(frame, prompts)
-masks = segmenter.predict(frame, boxes)
-objects_2d = build_object_candidates(boxes, masks)
-filter low-confidence detections
-save debug visualization
-```
+`PerceptionResult` (spec §3.2 ObjectCandidate2D subset) saved as
+`runs/snapshot_<image>.json` plus per-mask PNGs and a viz PNG.
 
-### 5.4 Output Format
+### 5.4 Acceptance Criteria
 
-```json
-{
-  "frame_id": 12,
-  "objects_2d": [
-    {
-      "id": "obj_tmp_01",
-      "label": "cup",
-      "bbox_xyxy": [412, 208, 522, 391],
-      "mask_path": "runs/frame_0012/obj_tmp_01.png",
-      "detector_confidence": 0.76,
-      "mask_quality": 0.81
-    }
-  ]
-}
-```
+- ≥ 5 common desk objects detected on sample images.
+- Masks saved and visualizable.
+- Failed detections logged without crashing.
+- End-to-end snapshot latency recorded.
 
-### 5.5 Sequence Diagram
+### 5.5 Status — ✅ Complete
 
-```mermaid
-sequenceDiagram
-  participant App as main.py
-  participant Cam as Camera
-  participant Det as Detector
-  participant Seg as Segmenter
-  participant Store as Debug Store
-
-  App->>Cam: read frame
-  Cam-->>App: RGB frame
-  App->>Det: predict(frame, prompts)
-  Det-->>App: boxes, labels, scores
-  App->>Seg: predict(frame, boxes)
-  Seg-->>App: masks
-  App->>Store: save boxes, masks, visualization
-```
-
-### 5.6 Acceptance Criteria
-
-- The system detects and segments at least 5 common desk objects.
-- Detection results are saved as JSON.
-- Mask visualizations are saved for inspection.
-- Perception output can be replayed without the original models.
-- The system can run in `snapshot` mode for reproducible tests.
+Implemented in `src/perception/` with `IDEA-Research/grounding-dino-tiny` +
+`facebook/sam-vit-base`. Verified on COCO test image (8 detections of cats /
+couch / remotes / blanket / pillows).
 
 ---
 
-## 6. Phase 3: Depth Estimation and 3D Object Lifting
+## 6. Phase 3 — Depth Lifting and FramePacket
 
 ### 6.1 Requirements
 
-- Generate a depth map for each RGB frame.
-- Support monocular depth and optional RGB-D camera depth.
-- Compute object-level depth statistics from each mask.
-- Lift each object into approximate 3D coordinates.
-- Represent uncertainty explicitly.
-- Mark outputs as `metric_3d` or `relative_3d` based on calibration quality.
+- Promote frame I/O to `FramePacket` (carries intrinsics + pose).
+- Add `spatial/pose_source.py` with three implementations:
+  - `FixedPoseSource` — camera at origin, identity rotation (MVP).
+  - `SimPoseSource` — read from a sidecar JSONL file.
+  - `SLAMPoseSource` — optional, see §14.1.
+- Add monocular depth via Depth Anything V2 (module already scaffolded).
+- Implement `spatial/object_lifter.py`:
+  - Collect valid depth pixels inside each mask.
+  - Remove outliers via percentile filtering (default 10–90 IQR).
+  - Use **median** depth.
+  - Project mask pixels via pinhole model:
+    `X = (u-cx)·Z/fx`, `Y = (v-cy)·Z/fy`, `Z = depth(u,v)`.
+  - Apply camera→world transform if pose is available.
+  - Compute 3D centroid, axis-aligned extent, depth uncertainty.
+  - Reject objects with too few valid pixels.
 
-### 6.2 Camera Model
+### 6.2 Acceptance Criteria
 
-For each pixel `(u, v)` with depth `Z`, lift it to 3D using camera intrinsics:
-
-```text
-X = (u - cx) * Z / fx
-Y = (v - cy) * Z / fy
-Z = depth(u, v)
-```
-
-If camera intrinsics are unavailable, use normalized coordinates and label the output as relative 3D.
-
-### 6.3 Depth Aggregation
-
-For each object mask:
-
-```python
-depth_values = depth_map[mask == 1]
-depth_values = remove_invalid_values(depth_values)
-depth_median = median(depth_values)
-depth_iqr = percentile(depth_values, 75) - percentile(depth_values, 25)
-```
-
-Use median instead of mean because segmentation boundaries, reflections, and transparent objects can produce unstable depth outliers.
-
-### 6.4 Logic Flow
-
-```text
-load RGB frame
-load object masks
-run depth model or read RGB-D depth
-for each object:
-    collect depth values inside mask
-    remove invalid and extreme values
-    compute median depth and IQR
-    lift mask center and sampled mask pixels into 3D
-    estimate 3D bounding box
-    attach uncertainty score
-```
-
-### 6.5 Acceptance Criteria
-
-- Each detected object has `center_3d`, `depth_median`, and `depth_iqr`.
-- The system can visually show object centers in a 3D debug view.
-- Objects with high depth uncertainty are marked as low-confidence.
-- A saved frame can be reprocessed and produce deterministic object state JSON.
+- Every detected object has `center_3d_world` (or `center_3d_camera` when
+  pose unavailable).
+- `depth_uncertainty` recorded for every object.
+- Debug view shows 3D centroids in the Three.js scene as small dots aligned
+  with the camera view.
 
 ---
 
-## 7. Phase 4: Object Memory, Tracking, and Temporal Stability
+## 7. Phase 4 — Object Tracking and SemanticMap
 
 ### 7.1 Requirements
 
-- Maintain object IDs across frames.
-- Smooth object positions and depth estimates.
-- Detect newly appeared objects.
-- Reduce flickering masks and relation changes.
-- Keep short-term scene memory.
-- Support SAM 2-style video segmentation when available.
+- Implement `tracking/tracker.py`:
+  - Start with a simple IoU + class + center-distance association.
+  - Upgrade to a ByteTrack-style backend via `supervision` once detector
+    outputs are stable.
+- Implement `spatial/semantic_map.py`:
+  - Maintain persistent `ObjectState`s keyed by `object_id`.
+  - Fusion rule:
+    ```
+    position ← α·new + (1-α)·old
+    confidence ← Bayesian update
+    last_seen_frame ← current
+    ```
+  - Keep stale objects with decayed confidence; mark `tracking_status`.
+  - Support `reset()`, `save(path)`, `load(path)`.
 
-### 7.2 Tracking Strategy
+### 7.2 Acceptance Criteria
 
-Start with a deterministic tracker implemented in the project, then allow an optional ByteTrack-style backend through `supervision` once detector outputs are stable.
-
-Object association should use:
-
-```text
-IoU of masks or boxes
-+ class label match
-+ 2D center distance
-+ 3D center distance
-+ depth consistency
-+ optional visual embedding similarity
-```
-
-Recommended default:
-
-```text
-Phase 4 baseline: simple IoU / class / center-distance tracker
-Optional upgrade: ByteTrack-style association through supervision
-Reason: ByteTrack is popular for multi-object tracking, but this project also needs class labels, depth consistency, and scene-graph confidence, so a small custom association layer remains useful even when using a tracking library.
-```
-
-### 7.3 Temporal Smoothing
-
-```python
-smoothed_center_3d = alpha * current_center_3d + (1 - alpha) * previous_center_3d
-smoothed_depth = median(depth_history[-N:])
-smoothed_confidence = beta * current_confidence + (1 - beta) * previous_confidence
-```
-
-### 7.4 New Object Detection
-
-An object is considered new if:
-
-```text
-no existing tracked object matches it
-and confidence > threshold
-and it persists for at least K frames
-```
-
-### 7.5 Acceptance Criteria
-
-- Object IDs remain stable for at least 10 seconds under minor camera movement.
-- The pet can react to newly placed objects.
-- Scene graph flicker is visibly reduced.
-- Tracking confidence is stored in `ObjectState`.
+- The same object can be tracked across ≥ 50 consecutive frames in a replay
+  test.
+- An object that leaves the view remains in the map with decayed confidence.
+- Map can be saved and reloaded byte-identically.
 
 ---
 
-## 8. Phase 5: 3D Scene Graph and Spatial Relation Reasoning
+## 8. Phase 5 — Scene Graph and Spatial Relations
 
 ### 8.1 Requirements
 
-- Build a scene graph from object states.
-- Compute spatial relations among objects.
-- Support relation queries from the command parser.
-- Maintain explainable relation scores.
-- Store relation evidence for debugging.
+- `spatial/scene_graph.py` consumes SemanticMap and emits `SceneGraph`
+  per frame.
+- `spatial/relation_scorer.py` implements:
+  - `left_of / right_of / in_front_of / behind` — 3D vector projection
+    on a camera-relative axis (with thresholds from `configs/thresholds.yaml`).
+  - `near / far_from` — Gaussian over distance with `near_sigma`.
+  - `between` — convex combination test.
+  - `on_surface` — plane attachment test.
+  - `occluding` — 2D mask + 3D depth ordering.
 
-### 8.2 Supported Relations
+### 8.2 Acceptance Criteria
 
-| Relation | Rule Source | Description |
-|---|---|---|
-| `left_of` | 2D/3D center x | Subject is left of object |
-| `right_of` | 2D/3D center x | Subject is right of object |
-| `above` | 2D/3D center y | Subject is above object |
-| `below` | 2D/3D center y | Subject is below object |
-| `in_front_of` | depth z | Subject is closer to camera |
-| `behind` | depth z | Subject is farther from camera |
-| `near` | 3D distance | Subject is close to object |
-| `between` | geometric region | Subject lies between two anchors |
-| `occluding` | mask overlap plus depth | Subject may occlude object |
-| `safe_region_near` | occupancy map | Region is navigable for pet |
-
-### 8.3 Relation Scoring
-
-Each relation returns a score in `[0, 1]`.
-
-```python
-score_right_of(A, B) = sigmoid((A.center_3d.x - B.center_3d.x) / threshold_x)
-score_near(A, B) = exp(-distance(A, B) / sigma)
-score_behind(A, B) = sigmoid((A.center_3d.z - B.center_3d.z) / threshold_z)
-```
-
-### 8.4 Occupancy Map
-
-For pet movement, project object regions into a simplified navigation plane.
-
-```text
-3D object bounding boxes
--> blocked regions
--> candidate safe points
--> target region selection
-```
-
-### 8.5 Acceptance Criteria
-
-- The system can answer relation queries such as:
-
-```text
-Which objects are near the cup?
-What is right of the keyboard?
-Is the mouse in front of the laptop?
-Where can the cat hide?
-```
-
-- Relation decisions are explainable through coordinates, scores, and object IDs.
-- Scene graph can be exported as JSON.
-- The graph can be replayed without running the vision models.
+- On 10 hand-labelled desk scenes, ≥ 80% relation accuracy for each base
+  relation.
+- Scene graph exportable as JSON; debug panel shows highlighted edges on
+  hover.
 
 ---
 
-## 9. Phase 6: Natural Language Command Parser and Grounding Resolver
+## 9. Phase 6 — Command Parsing and Grounding Resolver
 
 ### 9.1 Requirements
 
-- Parse user commands into structured intent.
-- Resolve target object or target region from the scene graph.
-- Support ambiguity handling.
-- Support deterministic fallback for common commands.
-- Avoid calling an LLM every video frame.
-- Log raw command, parsed intent, grounding result, and executed action.
+- `language/command_parser.py`:
+  - Rule-based parser handles ≥ 20 canonical commands without LLM.
+  - Optional LLM mode (`PET_AGENT_LLM_PARSER=on`) — JSON-schema-validated
+    output; on schema failure, fall through to rules.
+  - LLM never produces low-level motion. Output is structured
+    `CommandIntent` only.
+- `planning/grounding_resolver.py`:
+  - Score candidate targets:
+    ```
+    score = 0.35·semantic_match
+          + 0.20·attribute_match
+          + 0.25·relation_match
+          + 0.10·visibility_score
+          + 0.10·navigation_feasibility
+    ```
+  - Emit a `NavigationGoal` when `final_score ≥ thresholds.grounding.min_final_score`.
+  - Trigger clarification when ambiguity margin between top-2 candidates
+    is below `thresholds.grounding.ambiguity_margin`.
 
-### 9.2 Supported Intents
+### 9.2 Acceptance Criteria
 
-| Intent | Example | Output |
-|---|---|---|
-| `move_to_object` | Go to the cup | Object target |
-| `move_to_relation` | Go to the right of the cup | Region target |
-| `hide` | Hide behind the keyboard | Region behind anchor |
-| `avoid` | Do not go near the bottle | Constraint |
-| `look_at` | Look at the red box | Gaze target |
-| `follow_new_object` | Look at what I just placed | Temporal novelty target |
-| `ask_clarification` | Which cup do you mean? | Dialog action |
-
-### 9.3 Command Parser Output
-
-```json
-{
-  "intent": "move_to_relation",
-  "target": {
-    "class": "cup",
-    "attributes": ["red"]
-  },
-  "relation": {
-    "type": "right_of",
-    "anchor": "target"
-  },
-  "constraints": []
-}
-```
-
-### 9.4 Grounding Resolver Scoring
-
-For each candidate object or region:
-
-```text
-final_score =
-  0.35 * semantic_match
-+ 0.20 * attribute_match
-+ 0.20 * relation_match
-+ 0.15 * spatial_feasibility
-+ 0.10 * perception_confidence
-```
-
-If the highest score is below `GROUNDING_THRESHOLD`, the system should ask for clarification or explain what it found.
-
-### 9.5 Failure Handling
-
-| Failure | Behavior |
-|---|---|
-| No target found | Ask user to rephrase or list visible alternatives |
-| Multiple similar targets | Ask disambiguation question |
-| Target visible but depth unreliable | Move in 2D overlay mode or ask user to adjust camera |
-| Target region blocked | Choose nearest safe region and explain fallback |
-| Relation impossible | Refuse the action and give reason |
-| Backend disagreement | Ask clarification or prefer safer target |
-
-### 9.6 Sequence Diagram
-
-```mermaid
-sequenceDiagram
-  participant User as User
-  participant Parser as Command Parser
-  participant Graph as Scene Graph
-  participant Resolver as Grounding Resolver
-  participant Planner as Behavior Planner
-
-  User->>Parser: "hide behind the red cup"
-  Parser-->>Resolver: structured intent
-  Resolver->>Graph: query objects and relations
-  Graph-->>Resolver: candidates and relation scores
-  Resolver-->>Planner: target region and confidence
-  Planner-->>User: execute or ask clarification
-```
-
-### 9.7 Acceptance Criteria
-
-- At least 20 predefined natural language commands are supported.
-- At least 5 ambiguous or failure cases are handled safely.
-- Parsed command JSON is logged for evaluation.
-- The resolver can explain why it selected a target.
+- ≥ 20 predefined commands parse to valid intent.
+- Ambiguous commands produce clarification rather than guesses.
+- Every `NavigationGoal` carries an `explanation` string.
 
 ---
 
-## 10. Phase 7: 3D Pet Behavior Planner
+## 10. Phase 7 — Occupancy Grid and A\* Path Planning
 
 ### 10.1 Requirements
 
-- Convert grounded targets into pet actions.
-- Support navigation on a simplified 3D floor or table plane.
-- Support behavior-specific animations.
-- Support obstacle avoidance using object masks and projected 3D regions.
-- Ask clarification instead of moving when grounding is unsafe.
+- `planning/occupancy_grid.py`:
+  - Project SemanticMap objects onto a 2D grid (resolution from config).
+  - Inflate obstacles by `obstacle_padding`.
+  - Mark forbidden cells from constraints (`avoid_object` halos).
+  - Allow a per-frame snapshot to be saved for debugging.
+- `planning/astar.py`:
+  - 8-connectivity by default; configurable.
+  - Heuristic: Euclidean distance.
+  - Search the nearest free cell when the goal cell is occupied.
+  - Return failure reasons: `no_path`, `goal_unreachable`, `start_blocked`.
+- `planning/planner.py` orchestrator:
+  - Input `NavigationGoal` + current SemanticMap.
+  - Output a smoothed path (Catmull-Rom or line-of-sight pruning) plus
+    debug overlay.
 
-### 10.2 Pet Behavior States
-
-| State | Description |
-|---|---|
-| `idle` | Pet waits or performs small random movements |
-| `curious` | Pet looks at newly detected object |
-| `walking` | Pet moves toward target |
-| `sitting` | Pet sits near target |
-| `hiding` | Pet moves behind an anchor object |
-| `avoiding` | Pet reroutes around unsafe object |
-| `confused` | Pet cannot ground command and asks clarification |
-
-### 10.3 Behavior Planning Logic
+### 10.2 Logic
 
 ```text
-input: CommandIntent + GroundingResult + SceneGraph
-if grounding confidence is low:
-    return confused / ask clarification
-if target is object:
-    compute approach point near object
-if target is relation:
-    compute relation-specific region
-if constraints exist:
-    remove unsafe candidate regions
-plan smooth path
-send movement and animation commands to renderer
+start = current_cat_position projected to grid
+goal  = navigation_goal.target_position_world projected to grid
+
+if goal_cell is blocked:
+    goal_cell = nearest_free(goal_cell)
+
+raw_path = AStar(start, goal_cell, occupancy_grid)
+path = smooth(raw_path)        # LOS prune + curve fit
+return path or PlannerFailure(reason)
 ```
 
-### 10.4 Target Region Rules
+### 10.3 Constraints Handled
 
-| Command | Target Position Rule |
-|---|---|
-| `go to cup` | nearest safe point around cup |
-| `go right of cup` | cup center plus positive x offset |
-| `hide behind cup` | cup center plus positive z offset relative to camera or world anchor |
-| `avoid bottle` | mark bottle area as blocked |
-| `between A and B` | midpoint between A and B if safe |
-| `look at A` | pet gaze target equals A center |
+- `avoid_object` — extra inflation around named obstacle.
+- `stay_on_surface` — restrict search to a polygon region.
+- `keep_distance` — minimum distance halo.
+- `approach_from` — bias search toward a half-plane around the goal.
 
-### 10.5 Acceptance Criteria
+### 10.4 Acceptance Criteria
 
-- The pet can move to object-relative positions.
-- The pet can refuse or reroute around blocked regions.
-- The pet animation matches the intended action.
-- The pet can ask a clarification question when needed.
+- Cat plans path to target object without crossing obstacles.
+- Planner returns a structured failure when no path exists (no silent crash).
+- Debug overlay shows the occupancy grid and the chosen path.
+- ≥ 80% success on a hand-built set of 20 desk-scene planning tests.
 
 ---
 
-## 11. Phase 8: OpenScene Research Backend
+## 11. Phase 8 — Pure-Pursuit Controller and Path Following
 
-### 11.1 Requirements
+### 11.1 Kinematic Model
 
-- Prepare at least one static RGB-D or point-cloud scene.
-- Run an OpenScene-style open-vocabulary 3D query pipeline.
-- Query 3D points or regions using text.
-- Export 3D semantic query results into a common format usable by the scene graph.
-- Keep this backend separate from the live demo until the mainline works.
-
-### 11.2 Input Options
-
-| Input Type | Use Case |
-|---|---|
-| Public indoor 3D scene dataset | Fastest path to reproduce OpenScene-style behavior |
-| Recorded RGB-D desk scene | Closer to project demo, requires camera and preprocessing |
-| Reconstructed point cloud from video | Strong research value, highest setup risk |
-
-### 11.3 Query Examples
+The cat is modelled as a planar unicycle:
 
 ```text
-chair
-table
-place to hide
-object made of metal
-soft object
-openable object
+state:   (x, y, θ)
+control: (v, ω)            with v ∈ [0, v_max], |ω| ≤ ω_max
+update:  x  += v·cos(θ)·dt
+         y  += v·sin(θ)·dt
+         θ  += ω·dt
 ```
 
-### 11.4 Output Contract
+z is fixed by the navigable surface (desk plane).
 
-```json
-{
-  "scene_id": "static_scene_01",
-  "query": "chair",
-  "backend": "openscene",
-  "semantic_points": [
-    {
-      "xyz": [0.31, 0.48, 1.22],
-      "score": 0.87
-    }
-  ],
-  "clusters": [
-    {
-      "cluster_id": "cluster_001",
-      "label": "chair",
-      "centroid_3d": [0.35, 0.50, 1.24],
-      "score": 0.83
-    }
-  ]
-}
-```
-
-### 11.5 Conversion to Scene Graph
+### 11.2 Pure-Pursuit Tracker
 
 ```text
-3D semantic points
--> cluster high-score points
--> estimate cluster centroid and extent
--> convert cluster to ObjectState
--> insert into SceneGraph with source_backend = "openscene"
+lookahead_point  = first point on path at distance ≥ lookahead_distance
+heading_error    = atan2(dy, dx) - θ
+ω                = Kp_θ · heading_error
+v                = clamp(base_speed · cos²(heading_error), v_min, v_max)
 ```
 
-### 11.6 Acceptance Criteria
+A small PID smooths `v` to remove jitter. Lookahead, gains, and limits live
+in `configs/control.yaml`.
 
-- The backend can run at least 5 text queries over a prepared 3D scene.
-- Query results can be visualized as 3D heatmaps or colored point clusters.
-- At least one OpenScene result is converted into `ObjectState` format.
-- The backend can be compared against the mainline on static scenes.
+### 11.3 Frontend Animation
+
+The frontend consumes either:
+
+- `move_to` — one Three.js Tween (existing behavior).
+- `move_follow_path` — a sequence of Tweens chained by `onComplete`, or a
+  parametric Catmull-Rom curve sampled at the controller's effective speed.
+  Heading lerps along the path.
+
+`samples/pet_actions.jsonl` gains a `move_follow_path` example.
+
+### 11.4 Acceptance Criteria
+
+- Cat follows a planned path without teleporting; no foot sliding past a
+  threshold cross-track error.
+- Cat stops within `goal_tolerance` of the target.
+- Control logs include speed, heading error, cross-track error, path
+  progress, final error.
+- Interrupting with a new command preempts the previous path within ≤ 100 ms.
 
 ---
 
-## 12. Phase 9: Dual-Backend Comparison and Integration
+## 12. Phase 9 — Active Exploration
 
 ### 12.1 Requirements
 
-- Compare mainline backend and research backend on equivalent queries.
-- Measure latency, setup cost, query flexibility, and grounding success.
-- Identify cases where object-centric lifting works better.
-- Identify cases where OpenScene-style dense 3D semantics works better.
-- Present the comparison in the final report.
+- Maintain observed / unobserved cells in the SemanticMap.
+- Define exploration goals:
+  - inspect unknown region
+  - search for named object
+  - verify stale object
+  - look behind obstacle
+- Pick the next viewpoint with a heuristic:
+  ```
+  score = 0.40·expected_new_area
+        + 0.25·semantic_uncertainty
+        + 0.20·object_search_relevance
+        - 0.15·travel_cost
+  ```
+- Update SemanticMap after each viewpoint.
+- Report findings back to user via the pet's speech bubble.
 
-### 12.2 Comparison Protocol
+### 12.2 Acceptance Criteria
 
-```text
-for each static scene:
-    run mainline perception if RGB frames are available
-    run OpenScene-style query if 3D data is available
-    normalize outputs into ObjectState or SemanticRegion
-    run same command through GroundingResolver
-    compare target selection and explanation
-```
-
-### 12.3 Comparison Metrics
-
-| Metric | Definition |
-|---|---|
-| Query success | Whether the backend returns a relevant object or region |
-| Localization quality | Whether target position matches annotation |
-| Latency | Query time or end-to-end processing time |
-| Setup effort | Required preprocessing steps |
-| Debuggability | Ability to inspect failures |
-| Integration cost | Work required to feed result into behavior planner |
-| Failure mode | Categorized reason for wrong or missing result |
-
-### 12.4 Expected Findings
-
-| Scenario | Likely Better Backend | Reason |
-|---|---|---|
-| Live webcam desk interaction | Mainline | Lower setup cost and easier live processing |
-| Static 3D semantic query | OpenScene | Native 3D point features |
-| Common object command | Mainline | Strong 2D detection and segmentation |
-| Vague semantic query | OpenScene | Dense CLIP-aligned features may support broader concepts |
-| Behavior planning | Mainline | Object states and scene graph are easier to control |
-
-### 12.5 Acceptance Criteria
-
-- The report includes a table comparing both backends.
-- At least 10 queries are tested on the mainline backend.
-- At least 5 queries are tested on the OpenScene backend if setup succeeds.
-- The project clearly states why the mainline is used for the final live demo.
+- Cat selects at least one meaningful exploration goal on a half-known map.
+- SemanticMap measurably grows after exploration.
+- System reports newly discovered objects.
+- Exploration can be cancelled by a new command.
 
 ---
 
-## 13. Phase 10: Evaluation, Demo Protocol, and Report Assets
+## 13. Phase 10 — Evaluation and Demo Packaging
 
-### 13.1 Requirements
+### 13.1 Required Demo Scenarios
 
-- Provide quantitative evaluation.
-- Provide reproducible demo scenes.
-- Provide failure case analysis.
-- Provide architecture diagrams and demo video.
-- Report both successful and failed examples.
+1. **Object navigation** — "Go to the red cup."
+2. **Spatial relation** — "Hide behind the keyboard."
+3. **Avoidance** — "Go to the box but avoid the mouse."
+4. **Exploration** — "Explore the desk and tell me what you found."
+5. **Clarification** — "Go to the cup" when multiple cups exist.
+6. **Persistent memory** — Object leaves view; map keeps it with decayed
+   confidence.
+7. **(Optional) OpenScene comparison** — Same query on prebuilt scene.
 
-### 13.2 Evaluation Dataset
+### 13.2 Metrics
 
-Create a small local benchmark:
+| Metric | Definition |
+|---|---|
+| Detection recall | Target object appears in proposals |
+| Mask quality proxy | Mask area / bbox area in [0.4, 1.0] |
+| Depth stability | IQR + frame-to-frame variance |
+| Tracking stability | ID persistence across frames |
+| Relation accuracy | Annotated vs predicted relation |
+| Grounding accuracy | Selected target matches expectation |
+| Path success rate | A* returns a usable path |
+| Collision count | Path / executed motion crossing occupied cells |
+| Task success rate | End-to-end command satisfied |
+| Cross-track error | Controller pure-pursuit deviation from path |
+| Latency | Command → first PetAction time |
+| Perception FPS | Effective perception update rate |
+| Backend agreement | Mainline vs OpenScene target match |
+
+### 13.3 Dataset
 
 ```text
 10 desk scenes
-5 room or table arrangements
-50 natural language commands
-at least 10 ambiguous or failure commands
+5  room / table arrangements
+50 natural-language commands
+10+ ambiguous or failure commands
+5  no-target commands
 ```
 
-Each test sample should include:
+### 13.4 Artifacts
 
-```json
-{
-  "scene_id": "desk_03",
-  "command": "hide behind the red cup",
-  "expected_object": "cup_red_01",
-  "expected_relation": "behind",
-  "expected_behavior": "hide",
-  "success_criteria": "pet target position is behind the red cup and not inside obstacle mask"
-}
-```
-
-### 13.3 Metrics
-
-| Metric | Definition |
-|---|---|
-| Detection Recall | Whether target object is detected |
-| Mask Quality Proxy | Mask stability and visible overlap check |
-| Depth Stability | IQR and frame-to-frame depth variance |
-| Tracking Stability | Whether object IDs remain consistent |
-| Relation Accuracy | Whether relation decision matches annotation |
-| Grounding Accuracy | Whether selected target matches expected object or region |
-| Task Success Rate | Whether final pet behavior satisfies command |
-| Clarification Quality | Whether system asks instead of executing unsafe or ambiguous command |
-| Latency | Time from command to action |
-| Perception FPS | Effective perception update rate |
-| Backend Agreement | Whether mainline and research backend select the same target |
-
-### 13.4 Demo Protocol
-
-```text
-1. Start application in live demo mode.
-2. Show empty scene with idle cat.
-3. Place 3 to 5 common objects on desk.
-4. Show detected masks and 3D object centers.
-5. Issue simple command: "go to the cup".
-6. Issue relational command: "hide behind the keyboard".
-7. Issue constraint command: "go to the box but avoid the bottle".
-8. Issue ambiguous command: "go to the cup" when two cups are visible.
-9. Show clarification behavior.
-10. Show metrics dashboard or saved logs.
-11. Optionally show OpenScene static-scene query comparison.
-```
-
-### 13.5 Final Report Assets
-
-- `README.md`
-- `spec.md`
+- `README.md`, `docs/spec.md`
 - Architecture diagram
 - Module sequence diagram
 - Demo video
-- Evaluation table
+- Evaluation tables (CSV + Markdown)
 - Failure case gallery
-- Model comparison section
-- Backend comparison table
-- Technical limitations section
+- (Optional) OpenScene backend comparison report
 
 ---
 
-## 14. Repository Structure
+## 14. Optional Extensions
 
-```text
-3d-pet-agent/
-  README.md
-  spec.md
-  requirements.txt
-  pyproject.toml
-  main.py
-  configs/
-    prompts.txt
-    camera.yaml
-    models.yaml
-    thresholds.yaml
-    runtime.yaml
-  assets/
-    cat_model/
-    textures/
-    sounds/
-  src/
-    camera_service/
-      webcam.py
-      video_reader.py
-      phone_stream.py
-    perception/
-      detector.py
-      segmenter.py
-      depth.py
-      pipeline.py
-    spatial/
-      object_lifter.py
-      scene_graph.py
-      relation_scorer.py
-      occupancy.py
-    tracking/
-      tracker.py
-      memory.py
-      smoothing.py
-    language/
-      command_parser.py
-      prompt_templates.py
-      fallback_rules.py
-      schema.py
-    planning/
-      grounding_resolver.py
-      behavior_planner.py
-      path_planner.py
-    runtime/
-      pet_runtime.py
-      renderer_bridge.py
-      websocket_server.py
-    research/
-      openscene_backend.py
-      pointcloud_utils.py
-      backend_compare.py
-    evaluation/
-      dataset.py
-      metrics.py
-      run_eval.py
-      report_tables.py
-  frontend/
-    package.json
-    vite.config.ts
-    tsconfig.json
-    src/
-      main.ts
-      App.vue
-      renderer/
-      debug_panel/
-  samples/
-    images/
-    videos/
-    commands.jsonl
-  eval/
-    scenes/
-    annotations.jsonl
-  runs/
-    debug_outputs/
-  tests/
-    test_parser.py
-    test_relations.py
-    test_grounding.py
-    test_object_lifter.py
-    test_behavior_planner.py
-```
+Each item below adds depth but does **not** gate the demo. Pick at most two
+if time-bound.
+
+### 14.1 Visual SLAM (course § Bayes / Graph SLAM / 3D SLAM)
+
+- `research/slam_adapter.py` plugs into `spatial/pose_source.py`.
+- Recommended backbone: ORB-SLAM3 (RGB-D or monocular) or DROID-SLAM as
+  research alternative.
+- Coordinate handshake: SLAM publishes `world ← camera` SE(3); object lifter
+  applies it transparently.
+- Acceptance:
+  - Pose drift ≤ 5 cm over a 2-minute desk-top loop closure.
+  - SemanticMap survives 360° camera rotation.
+
+### 14.2 OpenScene Research Backend (course § VLM/LLM / 3D embodied)
+
+- `research/openscene_backend.py` consumes a prepared point cloud / posed RGB-D set.
+- Emits 3D relevance heatmaps and candidate regions.
+- `mode compare_backends` runs identical queries through both backends and
+  exports a comparison table.
+- Acceptance: At least 5 queries succeed and visualize.
+
+### 14.3 RL-Based Exploration Policy (course § RL I/II)
+
+- `research/rl_explorer.py`.
+- State: known object count, unknown area ratio, target visible flag,
+  distance to nearest frontier, semantic uncertainty.
+- Actions: `inspect_frontier`, `move_to_known_object`, `look_around`,
+  `ask_user`, `return_to_user`.
+- Reward: `+1.0` discovered relevant object, `+0.5` reduced unknown area,
+  `+0.3` verified stale object, `−0.2` unnecessary movement, `−1.0`
+  collision, `−0.5` repeated failed inspection.
+- Training: offline replay first; baseline = heuristic exploration of §12.
+- Acceptance: RL beats heuristic on coverage by ≥ 10% over 50 trials, OR
+  the experiment is honestly reported as inconclusive.
+
+### 14.4 ROS 2 Nav2 Bridge (course § Nav stack)
+
+- Export `NavigationGoal` to `geometry_msgs/PoseStamped` on `/goal_pose`.
+- Subscribe to `/cmd_vel` and animate the cat from the Twist stream.
+- Intended for a follow-up physical-robot demo, **not** the virtual-pet
+  deliverable.
 
 ---
 
-## 15. Dependencies
+## 15. Configuration
 
-### 15.1 Python Core
-
-```text
-torch
-torchvision
-opencv-python
-open3d
-numpy
-scipy
-pydantic
-pydantic-settings
-pyyaml
-pillow
-matplotlib
-websockets
-fastapi
-uvicorn
-supervision
-```
-
-### 15.2 Vision Models
-
-```text
-GroundingDINO or compatible open-vocabulary detector
-SAM or SAM 2 compatible segmenter
-Depth Anything V2 or compatible monocular depth model
-Optional: CLIP or SigLIP for re-ranking visual-text matches
-Optional: OpenScene research backend dependencies
-```
-
-### 15.3 Tracking and 3D Utilities
-
-```text
-supervision for detection and tracking result adapters
-ByteTrack-style association as the default live tracking baseline
-Open3D for point clouds, 3D geometry utilities, and static-scene debugging
-```
-
-Tracking choice:
-
-```text
-Use a simple IoU / class / center-distance tracker first, then expose a ByteTrack-style backend through supervision when detector outputs are stable. This keeps the live demo debuggable while leaving a path to a popular MOT-style tracker without making tracking the first bottleneck.
-```
-
-### 15.4 Frontend and 3D Runtime
-
-```text
-Vue 3
-Vite
-Vite Vue plugin web toolchain
-TypeScript
-three
-@tweenjs/tween.js
-lil-gui
-```
-
-3D helper choice:
-
-```text
-Use native Three.js helpers instead of React-only wrappers. three owns rendering, @tweenjs/tween.js handles pet movement interpolation, and lil-gui provides a compact debug control panel for renderer state, camera parameters, and scene graph overlays.
-```
-
-### 15.5 3D Runtime Options
-
-| Runtime | Pros | Cons |
-|---|---|---|
-| Three.js + WebSocket | Fits web skills, easy debug UI, fast iteration | 3D animation tools less mature than Unity |
-| Unity | Strong 3D animation ecosystem | Python integration requires bridge |
-| Godot | Lightweight and open-source | Smaller AI integration ecosystem |
-
-Recommended first implementation:
-
-```text
-Vue 3 + Vite + TypeScript frontend using Three.js, connected to a Python backend via WebSocket
-```
-
-Reason:
-
-```text
-A browser-based debug UI can show camera frames, masks, depth maps, scene graph, and pet animation in one place. Vue 3 keeps the debug panel and app state organized, while Three.js remains responsible for the 3D scene.
-```
-
-### 15.6 Development Tooling
-
-```text
-uv for Python environment and dependency locking
-ruff for linting and formatting
-pytest for unit, integration, and replay tests
-```
-
----
-
-## 16. Configuration
-
-### 16.1 `configs/models.yaml`
+### 15.1 `configs/models.yaml`
 
 ```yaml
 detector:
   name: groundingdino
+  hf_model_id: IDEA-Research/grounding-dino-tiny
   device: cuda
-  box_threshold: 0.35
+  box_threshold: 0.30
   text_threshold: 0.25
 
 segmenter:
-  name: sam2
+  name: sam
+  hf_model_id: facebook/sam-vit-base
   device: cuda
-  model_size: base
 
 depth:
   name: depth_anything_v2
+  hf_model_id: depth-anything/Depth-Anything-V2-Small-hf
   device: cuda
   mode: relative
 
 openscene:
   enabled: false
   scene_root: data/openscene
-
-settings:
-  loader: pydantic-settings
-  env_prefix: PET_AGENT_
 ```
 
-### 16.2 `configs/thresholds.yaml`
+### 15.2 `configs/thresholds.yaml`
 
 ```yaml
 grounding:
@@ -1401,152 +1041,226 @@ behavior:
   default_speed: 0.8
 ```
 
-### 16.3 `configs/runtime.yaml`
+### 15.3 `configs/runtime.yaml`
 
 ```yaml
 runtime:
   perception_update_hz: 2
   tracking_update_hz: 10
+  control_hz: 30
   renderer_fps: 60
   save_debug_outputs: true
   ask_clarification: true
+
+server:
+  host: 127.0.0.1
+  http_port: 8000
+  ws_path: /ws/pet
+```
+
+### 15.4 `configs/navigation.yaml` (new in v2)
+
+```yaml
+occupancy:
+  resolution: 0.05
+  obstacle_padding: 0.10
+  grid_origin: [-2.0, -2.0]
+  grid_size: [80, 80]
+
+planner:
+  algorithm: astar
+  connectivity: 8
+  smooth: catmull_rom
+  goal_tolerance: 0.08
+
+pose_source: fixed   # fixed | sim | slam
+```
+
+### 15.5 `configs/control.yaml` (new in v2)
+
+```yaml
+kinematic:
+  v_max: 0.45
+  v_min: 0.05
+  omega_max: 1.2
+
+pure_pursuit:
+  lookahead_distance: 0.20
+  kp_heading: 1.0
+
+pid:
+  kp: 1.0
+  ki: 0.0
+  kd: 0.05
 ```
 
 ---
 
-## 17. Testing Strategy
+## 16. Testing Strategy
 
-### 17.1 Unit Tests
-
-| Test | Target |
-|---|---|
-| `test_parser.py` | Command parser output schema |
-| `test_relations.py` | Spatial relation scoring |
-| `test_grounding.py` | Candidate scoring and ambiguity detection |
-| `test_object_lifter.py` | 2D mask and depth to 3D point conversion |
-| `test_behavior_planner.py` | Target region and action generation |
-
-### 17.2 Integration Tests
+### 16.1 Unit Tests
 
 | Test | Target |
 |---|---|
-| Snapshot perception test | Image to objects JSON |
-| Scene graph replay test | Objects JSON to relation graph |
-| Command grounding test | Command plus scene graph to target |
-| Runtime bridge test | Pet action JSON to renderer movement |
-| End-to-end replay test | Video plus commands to executed actions |
+| `test_config` | YAML loading + pydantic validation |
+| `test_pet_runtime` | Action API + path broadcast |
+| `test_cli` | `--mode` dispatch |
+| `test_perception_schema` | ObjectCandidate2D + PerceptionResult |
+| `test_object_lifter` (Phase 3) | mask + depth → 3D centroid |
+| `test_semantic_map` (Phase 4) | fusion + persistence |
+| `test_relations` (Phase 5) | relation scoring |
+| `test_grounding` (Phase 6) | ambiguity detection + clarification |
+| `test_astar` (Phase 7) | path on synthetic grids + failure modes |
+| `test_pure_pursuit` (Phase 8) | tracking error on canonical paths |
 
-### 17.3 Regression Data
+### 16.2 Integration Tests
 
-Store debug outputs for every milestone:
+| Test | Description |
+|---|---|
+| `snapshot → objects.json` | Single image to perception result |
+| `objects → scene graph` | Tracking + relations |
+| `command + scene → goal` | Grounding |
+| `goal → path` | Planner over occupancy |
+| `path → motion` | Controller over kinematic model |
+| `runtime bridge` | PetAction JSON → renderer state |
+| `end-to-end replay` | Video + commands → executed paths |
+
+### 16.3 Regression Data
 
 ```text
 runs/
   phase2_detection/
   phase3_depth_lifting/
+  phase4_semantic_map/
   phase5_scene_graph/
   phase6_grounding/
+  phase7_planning/
+  phase8_control/
   phase10_eval/
 ```
 
 ---
 
-## 18. Risks & Notes
+## 17. Risks and Cut Rules
 
-### 18.1 Technical Risks
+### 17.1 Technical Risks
 
 | Risk | Description | Mitigation |
 |---|---|---|
-| Monocular depth is not metric | Relative depth may not match real scale | Use calibration, normalized 3D, or optional RGB-D camera |
-| Detection misses target | Open-vocabulary detector may fail on unusual objects | Maintain prompt vocabulary, re-query, ask clarification |
-| Mask flicker | Segmentation changes across frames | Add tracking, temporal smoothing, or SAM 2 video mode |
-| LLM overuse | Calling LLM every frame causes latency and cost | Parse only on user command and use deterministic fallback |
-| 3D pet looks detached from scene | Poor calibration between camera and renderer | Start with tabletop plane assumption and visible debug markers |
-| OpenScene setup cost | Native 3D open-vocabulary pipeline may consume project time | Keep as optional research comparison after mainline works |
-| Ambiguous natural language | User may refer to objects that are not uniquely identifiable | Ask clarification instead of guessing |
-| Transparent or reflective objects | Depth and masks may be unstable | Mark low confidence and use fallback behavior |
+| GroundingDINO fp16 mixes dtypes | `grid_sample` error in deformable attention | Run fp32 — measured ~0.5–1 s/frame on 4070 |
+| Monocular depth not metric | Bad 3D map | Calibration, normalized depth, optional RGB-D |
+| SAM mask flicker | Tracking failure | SAM 2 video memory, IoU tracker, mask quality gating |
+| SLAM scale drift | Bad navigation | Default to fixed pose; SLAM is optional |
+| Occupancy grid noisy | Bad plans | Inflate obstacles; manual walkable polygon MVP |
+| Pure-pursuit oscillation | Jittery cat | PID smoothing on `v`; cap `ω` |
+| LLM output invalid | Runtime errors | JSON schema validation + rule fallback |
+| Transparent / reflective objects | Bad depth | Mark low confidence, fall back to 2D heuristics |
+| RL training unstable | Time loss | Phase 14.3 stays optional |
+| OpenScene preprocessing complex | Project blocked | Phase 14.2 stays optional |
 
-### 18.2 Project Risks
+### 17.2 Cut Order (if time-bound)
 
-| Risk | Symptom | Action |
-|---|---|---|
-| Too much model chasing | Many repos installed, no working pet | Freeze model choices after Phase 2 |
-| No evaluation | Demo looks good once, but quality is unknown | Build evaluation commands by Phase 5 |
-| OpenScene consumes schedule | Static 3D backend blocks main demo | Start OpenScene only after Phase 7 |
-| Overly complex frontend | Pet UI absorbs perception time | Use placeholder cat and debug UI first |
-
-### 18.3 Success Definition
-
-The project is successful if it can reliably demonstrate the following:
+Cut in this order; never cut above the line.
 
 ```text
-The user gives a natural language command.
-The system identifies the referenced object or region.
-The system explains the grounding decision.
-The 3D cat performs the corresponding spatial behavior.
-The system asks clarification when grounding is unsafe or ambiguous.
-The project reports measurable performance and failure cases.
+─ optional ─────────────────────────────
+  RL exploration            (14.3)
+  ROS 2 Nav2 bridge         (14.4)
+  OpenScene research        (14.2)
+  Visual SLAM               (14.1)
+─ mainline ─────────────────────────────
+  Active exploration        (Phase 9)
+  Path tracking control     (Phase 8)
+  Path planning             (Phase 7)
+  ────────────────── do not cut below ──
+  Grounding resolver        (Phase 6)
+  Scene graph               (Phase 5)
+  Semantic map              (Phase 4)
+  Depth lifting             (Phase 3)
+  Perception                (Phase 2)
+  3D pet runtime            (Phase 1)
+```
+
+### 17.3 Minimum Viable Demo
+
+```text
+Camera or sample scene
+  → GroundingDINO + SAM detects and segments objects
+  → Depth lifting creates 3D object states with uncertainty
+  → User command grounds to a single target object
+  → A* plans a path on a simple occupancy grid
+  → Pure-pursuit controller moves the cat smoothly
+  → System logs success / failure with metrics
 ```
 
 ---
 
-## 19. Recommended Development Schedule
+## 18. Recommended Development Schedule
 
-### 19.1 Eight-Week Plan
+### 18.1 Eight-Week Plan
 
 | Week | Focus | Deliverable |
 |---|---|---|
-| 1 | 3D pet sandbox | Cat moves to manual 3D targets |
-| 2 | Detection and segmentation | Snapshot mode with boxes and masks |
-| 3 | Depth and 3D lifting | Objects have approximate 3D states |
-| 4 | Scene graph and relations | Relation queries work on saved scenes |
-| 5 | Command parser and resolver | Commands ground to objects or regions |
-| 6 | Behavior planner | Cat performs move, look, hide, avoid |
-| 7 | Tracking and robustness | Stable IDs, clarification, replay mode |
-| 8 | Evaluation and report | Demo video, metrics, failure analysis |
+| 1 | 3D pet sandbox | ✅ done |
+| 2 | Snapshot perception | ✅ done |
+| 3 | Depth + FramePacket + lifting | 3D centroids |
+| 4 | Tracking + SemanticMap | persistent objects |
+| 5 | Scene graph + grounding | NL → NavigationGoal |
+| 6 | Occupancy grid + A* | planned paths |
+| 7 | Pure pursuit + path-following | smooth motion |
+| 8 | Eval + demo packaging | report + video |
 
-### 19.2 Optional Extension Weeks
+### 18.2 Twelve-Week Plan (with one optional extension)
 
-| Extension | Focus | Deliverable |
-|---|---|---|
-| 9 | OpenScene static backend | Text queries over prepared 3D scene |
-| 10 | Dual-backend comparison | Mainline vs OpenScene report table |
-| 11 | Better 3D calibration | Camera intrinsics and tabletop plane calibration |
-| 12 | Frontend polish | Better pet model, animations, UI dashboard |
-
-### 19.3 Cut Rules
-
-If time is limited, cut in this order:
-
-```text
-1. OpenScene backend
-2. Advanced pet animations
-3. Multi-view reconstruction
-4. CLIP re-ranking
-5. RGB-D camera support
-```
-
-Do not cut these:
-
-```text
-1. Mainline perception
-2. 3D object state schema
-3. Scene graph
-4. Command resolver
-5. Behavior planner
-6. Evaluation
-```
+| Week | Focus |
+|---|---|
+| 1–2 | Phases 1–2 (✅ done) |
+| 3 | Phase 3 — depth + FramePacket |
+| 4 | Phase 4 — tracking + SemanticMap |
+| 5 | Phase 5 — scene graph |
+| 6 | Phase 6 — grounding |
+| 7 | Phase 7 — planning |
+| 8 | Phase 8 — control |
+| 9 | Phase 9 — exploration |
+| 10 | one of {Visual SLAM, OpenScene, RL} |
+| 11 | Phase 10 — evaluation |
+| 12 | Demo + report |
 
 ---
 
-## 20. References
+## Appendix A — Course Topic Mapping
 
-- Grounding DINO: Marrying DINO with Grounded Pre-Training for Open-Set Object Detection. https://arxiv.org/abs/2303.05499
-- Segment Anything. https://arxiv.org/abs/2304.02643
-- SAM 2: Segment Anything in Images and Videos. https://arxiv.org/abs/2408.00714
-- Segment Anything GitHub repository. https://github.com/facebookresearch/segment-anything
-- SAM 2 GitHub repository. https://github.com/facebookresearch/sam2
-- OpenScene: 3D Scene Understanding with Open Vocabularies. https://arxiv.org/abs/2211.15654
-- OpenScene project page. https://pengsongyou.github.io/openscene
-- OpenScene GitHub repository. https://github.com/pengsongyou/openscene
-- Depth Anything V2: A More Capable, Faster and More Efficient Monocular Depth Estimation Model. https://arxiv.org/abs/2406.09414
+| Course topic | Project module |
+|---|---|
+| Kinematic model | Phase 8 `control/kinematic` |
+| PID control | Phase 8 `control/pid` |
+| Pure pursuit control | Phase 8 `control/pure_pursuit` |
+| Motion planning (A* / Dijkstra) | Phase 7 `planning/astar` |
+| Occupancy grid | Phase 7 `planning/occupancy_grid` |
+| Bayes filter | Phase 4 SemanticMap confidence fusion |
+| Kalman / EKF | Phase 4 (optional) object smoothing |
+| Graph optimization / SLAM backend | Optional 14.1 |
+| 3D SLAM (ORB-SLAM, direct, DNN) | Optional 14.1 |
+| Object detection + semantic segmentation | Phase 2 |
+| 2D → 3D embodied agent | Phases 3 + 7 + 8 |
+| VLM / LLM-driven planning | Phase 6 (rule-fallback default, LLM optional) |
+| Preference-based RL / VLM rewards | Optional 14.3 |
+| Active perception / exploration | Phase 9 |
+
+---
+
+## Appendix B — Reference Models and Frameworks
+
+| Tool | Purpose | Used in |
+|---|---|---|
+| GroundingDINO (`grounding-dino-tiny`) | Open-vocabulary detection | Phase 2 |
+| SAM / SAM 2 (`sam-vit-base`) | Promptable segmentation | Phase 2 |
+| Depth Anything V2 (`Depth-Anything-V2-Small-hf`) | Monocular depth | Phase 3 |
+| supervision | Tracker adapters, viz | Phase 4 |
+| Open3D | Point cloud + 3D geometry | Phase 3+ |
+| FastAPI + websockets | Backend | Phase 1+ |
+| Three.js + Vue 3 + Vite + TS | Frontend | Phase 1+ |
+| ORB-SLAM2 / ORB-SLAM3 | Visual SLAM | Optional 14.1 |
+| OpenScene | 3D open-vocabulary | Optional 14.2 |
+| Stable Baselines3 | RL training | Optional 14.3 |
+| ROS 2 Nav2 | Reference nav stack | Optional 14.4 |

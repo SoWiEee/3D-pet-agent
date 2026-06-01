@@ -20,6 +20,9 @@ export class PetScene {
   targetMarker: TargetMarker;
   private clock = new THREE.Clock();
   private tweens = new TweenGroup();
+  private activeMotion:
+    | { kind: "single" | "path"; tweens: Tween<{ x: number; y: number; z: number }>[] }
+    | null = null;
   private gridHelper!: THREE.GridHelper;
   private axes!: THREE.AxesHelper;
   private origin!: THREE.Group;
@@ -120,6 +123,7 @@ export class PetScene {
 
   // ── public API ────────────────────────────────────────────────────────
   moveTo(x: number, y: number, z: number, speed = 0.8) {
+    this.cancelActiveMotion();
     const start = this.cat.group.position.clone();
     const dist = start.distanceTo(new THREE.Vector3(x, y, z));
     const duration = Math.max(300, (dist / Math.max(0.2, speed)) * 1000);
@@ -128,12 +132,77 @@ export class PetScene {
     // Face the destination.
     this.cat.faceTowards(x, z);
 
-    new Tween(start, this.tweens)
+    const tween = new Tween(start, this.tweens)
       .to({ x, y, z }, duration)
       .easing(Easing.Quadratic.InOut)
       .onUpdate((v) => this.cat.group.position.set(v.x, v.y, v.z))
-      .onComplete(() => this.cat.setAnimation("idle"))
+      .onComplete(() => {
+        this.cat.setAnimation("idle");
+        this.activeMotion = null;
+      })
       .start();
+    this.activeMotion = { kind: "single", tweens: [tween] };
+  }
+
+  /**
+   * Traverse a sequence of waypoints with smooth heading. Used by the
+   * controller (spec §11) — each waypoint is one chained tween whose duration
+   * is sized by segment length and target speed.
+   */
+  followPath(path: [number, number, number][], speed = 0.35) {
+    if (!path || path.length === 0) return;
+    this.cancelActiveMotion();
+    const safeSpeed = Math.max(0.1, speed);
+    const cat = this.cat;
+
+    // Mark the final goal.
+    const goal = path[path.length - 1];
+    this.targetMarker.placeAt(goal[0], goal[1], goal[2]);
+    cat.setAnimation("walk");
+
+    const tweens: Tween<{ x: number; y: number; z: number }>[] = [];
+    // Snap to first waypoint if the cat is far from it (handles plan replans).
+    const here = cat.group.position;
+    const first = new THREE.Vector3(path[0][0], path[0][1], path[0][2]);
+    if (here.distanceTo(first) > 0.6) {
+      cat.group.position.copy(first);
+    }
+
+    let prev = cat.group.position.clone();
+    for (let i = 1; i < path.length; i++) {
+      const [tx, ty, tz] = path[i];
+      const next = new THREE.Vector3(tx, ty, tz);
+      const dist = prev.distanceTo(next);
+      const duration = Math.max(180, (dist / safeSpeed) * 1000);
+      const fromHeading = prev.clone();
+      const t = new Tween(fromHeading, this.tweens)
+        .to({ x: tx, y: ty, z: tz }, duration)
+        .easing(Easing.Quadratic.InOut)
+        .onStart(() => cat.faceTowards(tx, tz))
+        .onUpdate((v) => cat.group.position.set(v.x, v.y, v.z));
+      if (tweens.length > 0) {
+        tweens[tweens.length - 1].chain(t);
+      }
+      tweens.push(t);
+      prev = next.clone();
+    }
+    // Final tween's onComplete returns the cat to idle.
+    if (tweens.length > 0) {
+      tweens[tweens.length - 1].onComplete(() => {
+        cat.setAnimation("idle");
+        this.activeMotion = null;
+      });
+      tweens[0].start();
+    }
+    this.activeMotion = { kind: "path", tweens };
+  }
+
+  private cancelActiveMotion() {
+    if (!this.activeMotion) return;
+    for (const t of this.activeMotion.tweens) {
+      t.stop();
+    }
+    this.activeMotion = null;
   }
 
   lookAt(x: number, y: number, z: number) {

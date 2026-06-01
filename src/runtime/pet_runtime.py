@@ -37,13 +37,29 @@ class PetState(BaseModel):
     updated_at: float = Field(default_factory=time.time)
 
 
+Waypoint = tuple[float, float, float]
+
+
 class PetAction(BaseModel):
-    """A single broadcast event — matches spec §3.4.5 (PetAction)."""
+    """A single broadcast event — matches spec §3.7 (PetAction, v2).
+
+    Movement actions are split into:
+      - ``move_to``           direct manual move; backend tweens A → B.
+      - ``move_follow_path``  controller-produced path; frontend traverses
+                              waypoints with smooth heading.
+    """
 
     action: Literal[
-        "move_to", "look_at", "play_animation", "set_emotion", "ask", "state"
+        "move_to",
+        "move_follow_path",
+        "look_at",
+        "play_animation",
+        "set_emotion",
+        "ask",
+        "state",
     ]
-    target_position_3d: tuple[float, float, float] | None = None
+    target_position_3d: Waypoint | None = None
+    path: list[Waypoint] | None = None
     look_at_object_id: str | None = None
     animation: Animation | None = None
     emotion: Emotion | None = None
@@ -99,6 +115,40 @@ class PetRuntime:
         self._broadcast(action)
         return action
 
+    def move_follow_path(
+        self,
+        path: list[Waypoint],
+        *,
+        speed: float | None = None,
+        look_at_object_id: str | None = None,
+    ) -> PetAction:
+        """Walk along a planned path (spec §3.7 ``move_follow_path``).
+
+        The authoritative pet state snaps to the final waypoint at broadcast
+        time; the renderer is responsible for the smooth traversal. The
+        controller is expected to send new ``move_follow_path`` events at its
+        own update rate, replacing in-flight paths as the plan refines.
+        """
+        if not path:
+            raise ValueError("path must contain at least one waypoint")
+        end = path[-1]
+        self.state.position = Vec3(x=end[0], y=end[1], z=end[2])
+        if speed is not None:
+            self.state.speed = speed
+        self.state.animation = "walk"
+        self.state.updated_at = time.time()
+        action = PetAction(
+            action="move_follow_path",
+            path=[(float(x), float(y), float(z)) for x, y, z in path],
+            target_position_3d=(float(end[0]), float(end[1]), float(end[2])),
+            look_at_object_id=look_at_object_id,
+            animation="walk",
+            speed=self.state.speed,
+            state=self.state.model_copy(),
+        )
+        self._broadcast(action)
+        return action
+
     def look_at(self, x: float, y: float, z: float) -> PetAction:
         self.state.look_at = Vec3(x=x, y=y, z=z)
         self.state.updated_at = time.time()
@@ -141,6 +191,12 @@ class PetRuntime:
         if kind == "move_to":
             x, y, z = action["target_position_3d"]
             return self.move_to(x, y, z, speed=action.get("speed"))
+        if kind == "move_follow_path":
+            return self.move_follow_path(
+                action["path"],
+                speed=action.get("speed"),
+                look_at_object_id=action.get("look_at_object_id"),
+            )
         if kind == "look_at":
             x, y, z = action["target_position_3d"]
             return self.look_at(x, y, z)

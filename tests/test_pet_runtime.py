@@ -57,6 +57,40 @@ def test_unknown_action_raises():
         rt.apply({"action": "fly_to_moon"})
 
 
+def test_move_follow_path_snaps_state_to_end_and_broadcasts():
+    rt = PetRuntime()
+    q = rt.subscribe()
+    path = [(0.0, 0.0, 0.0), (0.2, 0.0, 0.4), (0.5, 0.0, 1.0)]
+    action = rt.move_follow_path(path, speed=0.45)
+    assert action.action == "move_follow_path"
+    assert action.path == path
+    assert action.target_position_3d == path[-1]
+    assert rt.state.position.as_tuple() == (0.5, 0.0, 1.0)
+    assert rt.state.animation == "walk"
+    assert rt.state.speed == 0.45
+    delivered = q.get_nowait()
+    assert delivered.action == "move_follow_path"
+    assert delivered.path and len(delivered.path) == 3
+
+
+def test_move_follow_path_rejects_empty_path():
+    rt = PetRuntime()
+    with pytest.raises(ValueError):
+        rt.move_follow_path([])
+
+
+def test_apply_dispatches_move_follow_path():
+    rt = PetRuntime()
+    rt.apply({
+        "action": "move_follow_path",
+        "path": [[0.0, 0.0, 0.0], [0.3, 0.0, 0.6]],
+        "speed": 0.3,
+        "look_at_object_id": "cup_001",
+    })
+    assert rt.state.position.as_tuple() == (0.3, 0.0, 0.6)
+    assert rt.state.speed == 0.3
+
+
 def test_pet_action_round_trips_json():
     a = PetAction(action="move_to", target_position_3d=(1.0, 2.0, 3.0), speed=0.7)
     blob = a.model_dump_json()

@@ -50,6 +50,9 @@ function fmt(n: number) {
             <template v-if="ev.action === 'move_to' && ev.target_position_3d">
               → ({{ ev.target_position_3d.map((v) => v.toFixed(2)).join(", ") }})
             </template>
+            <template v-else-if="ev.action === 'move_follow_path' && ev.path">
+              ↝ {{ ev.path.length }} wp · end ({{ ev.path[ev.path.length - 1].map((v) => v.toFixed(2)).join(", ") }})
+            </template>
             <template v-else-if="ev.action === 'play_animation'">{{ ev.animation }}</template>
             <template v-else-if="ev.action === 'set_emotion'">{{ ev.emotion }}</template>
             <template v-else-if="ev.action === 'ask'">"{{ ev.speech }}"</template>

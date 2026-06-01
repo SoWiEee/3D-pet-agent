@@ -4,7 +4,7 @@
 
 本專案整合了開放詞彙視覺模型、實例分割、深度估計、3D 場景圖，以及瀏覽器中的 3D 寵物 runtime。
 
-> 狀態：Phase 1（3D 寵物 runtime + sandbox）與 Phase 2（互動主線感知：偵測 + 分割）已實作並驗證。完整 10 階段藍圖請參考 [docs/spec.md](docs/spec.md)。
+> 狀態：Phase 1（3D 寵物 runtime + sandbox，含 path-following PetAction）與 Phase 2（互動主線感知：偵測 + 分割）已實作並驗證。後續導航 / 控制 / 探索路線圖請參考 [docs/spec.md](docs/spec.md)（v2，10 phases mainline + optional 擴充）。
 
 ---
 
@@ -218,13 +218,14 @@ http://127.0.0.1:5173/
 **驅動寵物的幾種方式：**
 
 - **底部命令列**輸入文字（按 Enter 送出）：
-  - `move 0.5 0 1.2` — 移動到指定座標
+  - `move 0.5 0 1.2` — 直接移動到指定座標（tween）
+  - `path 0 0 0 ; 0.3 0 0.5 ; 0.6 0 1.0` — 沿路徑點走（path-following，Phase 8 controller 預備）
   - `look -0.3 0.4 1.0` — 看向某點
   - `anim sit` / `anim hide` / `anim curious` — 切換動畫
   - `emote curious` / `emote happy` — 切換情緒
   - `say hello` — 寵物說話（會以斜體 serif 浮現）
 
-- **快捷按鈕**：「P1 · cup / P2 · keyboard / sit / hide / curious」。
+- **快捷按鈕**：「P1 · cup / P2 · keyboard / path · A* / sit / hide / curious」。
 
 - **HTTP API**（適合腳本化或測試）：
   ```bash
@@ -248,8 +249,8 @@ http://127.0.0.1:5173/
 |---|---|
 | `GET  /healthz` | 健康檢查 |
 | `GET  /pet/state` | 取得目前 PetState |
-| `POST /pet/action` | 送一個 `PetAction`（move_to / look_at / play_animation / set_emotion / ask）|
-| `POST /pet/perception` | 餵 Phase 2 感知結果，placeholder 行為會驅動寵物 |
+| `POST /pet/action` | 送一個 `PetAction`（`move_to` / `move_follow_path` / `look_at` / `play_animation` / `set_emotion` / `ask`）|
+| `POST /pet/perception` | 餵 Phase 2 感知結果，placeholder 行為會產生 3 點 `move_follow_path` 驅動寵物 |
 | `WS   /ws/pet` | 雙向動作串流（前端訂閱用）|
 
 ---
@@ -372,18 +373,25 @@ export PET_AGENT_CAMERA_INDEX=0
 cd frontend && npx vue-tsc --noEmit
 ```
 
-建議的階段開發順序（對齊 docs/spec.md §19）：
+建議的階段開發順序（對齊 docs/spec.md v2 §18）：
 
-1. ✅ Phase 1 — 3D 寵物 sandbox
+1. ✅ Phase 1 — 3D 寵物 sandbox（含 path-following）
 2. ✅ Phase 2 — Snapshot 偵測 + 分割
-3. ⬜ Phase 3 — 深度估計與 3D 物件 lifting
-4. ⬜ Phase 4 — 物件記憶與追蹤
-5. ⬜ Phase 5 — 場景圖與空間關係
-6. ⬜ Phase 6 — 指令解析與 Grounding Resolver
-7. ⬜ Phase 7 — 行為規劃
-8. ⬜ Phase 8 — Live demo 模式
-9. ⬜ Phase 9 — 評估與報告
-10. ⬜ Phase 10 — OpenScene 研究後端（可選）
+3. ⬜ Phase 3 — Depth + FramePacket + 3D 物件 lifting
+4. ⬜ Phase 4 — 物件追蹤 + SemanticMap（持久語意地圖）
+5. ⬜ Phase 5 — Scene Graph 與空間關係
+6. ⬜ Phase 6 — Command 解析與 Grounding Resolver → NavigationGoal
+7. ⬜ Phase 7 — Occupancy grid + A* path planning
+8. ⬜ Phase 8 — Pure-pursuit controller + 運動學模型
+9. ⬜ Phase 9 — Active exploration
+10. ⬜ Phase 10 — Evaluation + demo packaging
+
+Optional 擴充（不阻塞主線 demo）：
+
+- Visual SLAM（ORB-SLAM2/3 替換 fixed pose）
+- OpenScene 3D 開放詞彙查詢後端
+- RL 探索策略
+- ROS 2 Nav2 bridge
 
 ---
 
@@ -391,16 +399,17 @@ cd frontend && npx vue-tsc --noEmit
 
 | Phase | 描述 | 狀態 |
 |---|---|---|
-| 1 | 3D 寵物 runtime + sandbox | ✅ 完成 |
-| 2 | 互動主線感知（偵測 + 分割） | ✅ 完成 |
-| 3 | 深度估計與 3D 物件 lifting | ⬜ 模組已預備、尚未啟用 |
-| 4 | 物件追蹤與時序穩定 | ⬜ 待實作 |
-| 5 | 3D 場景圖與空間關係 | ⬜ 待實作 |
-| 6 | 指令解析與 Grounding Resolver | ⬜ 待實作（目前以最高信心物件作為 placeholder 行為）|
-| 7 | 寵物行為規劃 | ⬜ 待實作 |
-| 8 | OpenScene 研究後端 | ⬜ 待實作 |
-| 9 | 雙後端比較 | ⬜ 待實作 |
-| 10 | 評估、demo 協定、報告資產 | ⬜ 待實作 |
+| 1 | 3D 寵物 runtime + sandbox（含 `move_follow_path`） | ✅ 完成 |
+| 2 | 互動主線感知（GroundingDINO + SAM） | ✅ 完成 |
+| 3 | Depth + FramePacket + 3D 物件 lifting | ⬜ depth 模組已預備、尚未啟用 |
+| 4 | 物件追蹤 + SemanticMap（持久語意地圖） | ⬜ 待實作 |
+| 5 | Scene Graph 與空間關係 | ⬜ 待實作 |
+| 6 | Command 解析 + Grounding Resolver → NavigationGoal | ⬜ 待實作（目前以最高信心物件作為 placeholder 行為）|
+| 7 | Occupancy grid + A* path planning | ⬜ 待實作 |
+| 8 | Pure-pursuit controller + 運動學模型 | ⬜ 待實作（schema 已就緒）|
+| 9 | Active exploration | ⬜ 待實作 |
+| 10 | Evaluation + demo packaging | ⬜ 待實作 |
+| opt | Visual SLAM / OpenScene / RL / ROS 2 Nav2 | ⬜ optional 擴充 |
 
 ---
 

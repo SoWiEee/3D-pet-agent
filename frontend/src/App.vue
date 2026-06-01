@@ -30,6 +30,8 @@ watch(lastAction, (a: PetAction | null) => {
   if (a.action === "move_to" && a.target_position_3d) {
     const [x, y, z] = a.target_position_3d;
     scene.moveTo(x, y, z, a.speed ?? 0.8);
+  } else if (a.action === "move_follow_path" && a.path) {
+    scene.followPath(a.path, a.speed ?? 0.35);
   } else if (a.action === "look_at" && a.target_position_3d) {
     const [x, y, z] = a.target_position_3d;
     scene.lookAt(x, y, z);

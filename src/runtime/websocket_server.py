@@ -45,9 +45,14 @@ app.add_middleware(
 )
 
 
+Waypoint = tuple[float, float, float]
+
+
 class ActionRequest(BaseModel):
     action: str
-    target_position_3d: tuple[float, float, float] | None = None
+    target_position_3d: Waypoint | None = None
+    path: list[Waypoint] | None = None
+    look_at_object_id: str | None = None
     animation: str | None = None
     emotion: str | None = None
     speed: float | None = None
@@ -84,11 +89,25 @@ async def push_perception(payload: dict[str, Any]) -> dict[str, Any]:
     best = max(objects, key=lambda o: float(o.get("detector_confidence", 0.0)))
     label = best.get("label", "object")
     cx_n = float(best.get("center_normalized", [0.5, 0.5])[0])
-    # Map normalized x∈[0,1] → world x∈[-1, 1]; small z offset in front of camera.
+    target_x = (cx_n - 0.5) * 2.0
+    target_z = 1.2
     runtime.ask(f"I see a {label}")
     runtime.set_emotion("curious")
-    runtime.move_to(x=(cx_n - 0.5) * 2.0, y=0.0, z=1.2)
-    return {"applied": True, "target_label": label}
+    # Emit a tiny 3-waypoint approach path so the frontend exercises the
+    # path-following code path. The real A* planner arrives in Phase 7.
+    start = runtime.state.position
+    midpoint = (
+        (start.x + target_x) * 0.5,
+        0.0,
+        (start.z + target_z) * 0.5 + 0.1,
+    )
+    path = [
+        (start.x, 0.0, start.z),
+        midpoint,
+        (target_x, 0.0, target_z),
+    ]
+    runtime.move_follow_path(path, speed=0.6)
+    return {"applied": True, "target_label": label, "path_waypoints": len(path)}
 
 
 @app.websocket("/ws/pet")
