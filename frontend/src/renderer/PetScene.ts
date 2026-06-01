@@ -220,8 +220,20 @@ export class PetScene {
     this.cat.setAnimation(name);
   }
 
-  /** Phase 3: render lifted object centroids as phosphor markers. */
-  setWorldObjects(markers: { center: [number, number, number]; label: string; depth?: number }[]) {
+  /** Phase 3/4: render lifted + tracked object centroids as phosphor markers.
+   *
+   * ``tracking_status`` controls the marker's opacity envelope so stale /
+   * occluded tracks visibly fade without disappearing — the SemanticMap is
+   * authoritative, the renderer is a window onto it.
+   */
+  setWorldObjects(
+    markers: {
+      center: [number, number, number];
+      label: string;
+      depth?: number;
+      tracking_status?: "tracked" | "occluded" | "stale" | "lost";
+    }[],
+  ) {
     this.worldObjects.update(markers);
   }
 
@@ -421,48 +433,64 @@ class Cat {
 // each lifted object centroid. Spec §6 acceptance: "debug view shows 3D
 // centroids in the Three.js scene as small dots aligned with the camera view".
 // ─────────────────────────────────────────────────────────────────────────────
+type TrackingStatusLite = "tracked" | "occluded" | "stale" | "lost";
+
+// Per-status opacity envelope (dot, halo, stalk). "tracked" is the brightest;
+// "lost" is barely visible — a stale track that hasn't been pruned yet.
+const STATUS_FADE: Record<TrackingStatusLite, [number, number, number]> = {
+  tracked: [0.95, 0.4, 0.55],
+  occluded: [0.7, 0.28, 0.4],
+  stale: [0.4, 0.18, 0.22],
+  lost: [0.2, 0.08, 0.12],
+};
+
 class WorldObjectsLayer {
   group = new THREE.Group();
-  private items: THREE.Group[] = [];
+  private items: { group: THREE.Group; mats: THREE.Material[]; geos: THREE.BufferGeometry[] }[] = [];
   private dotGeo = new THREE.SphereGeometry(0.025, 14, 12);
-  private dotMat = new THREE.MeshBasicMaterial({
-    color: 0x74f7d0,
-    transparent: true,
-    opacity: 0.95,
-  });
-  private stalkMat = new THREE.LineBasicMaterial({
-    color: 0x2f6757,
-    transparent: true,
-    opacity: 0.55,
-  });
   private haloGeo = new THREE.RingGeometry(0.05, 0.06, 32);
-  private haloMat = new THREE.MeshBasicMaterial({
-    color: 0x74f7d0,
-    side: THREE.DoubleSide,
-    transparent: true,
-    opacity: 0.4,
-  });
 
-  update(markers: { center: [number, number, number]; label: string; depth?: number }[]) {
-    // Reset.
-    for (const g of this.items) {
-      this.group.remove(g);
-      g.traverse((obj) => {
-        const m = (obj as THREE.Mesh).material as THREE.Material | undefined;
-        if (m && (obj as THREE.Mesh).geometry !== this.dotGeo && (obj as THREE.Mesh).geometry !== this.haloGeo) {
-          (obj as THREE.Mesh).geometry?.dispose?.();
-        }
-      });
+  update(
+    markers: {
+      center: [number, number, number];
+      label: string;
+      depth?: number;
+      tracking_status?: TrackingStatusLite;
+    }[],
+  ) {
+    // Reset (dispose per-marker materials + per-marker stalk geometry; shared
+    // dot/halo geos are kept).
+    for (const it of this.items) {
+      this.group.remove(it.group);
+      for (const mat of it.mats) mat.dispose();
+      for (const g of it.geos) g.dispose();
     }
     this.items = [];
 
-    // Build new markers. The lifter scales relative-depth into the same
-    // world as the cat; for the camera at origin looking down -Z, lifted
-    // points end up in front of the cat in graphics-world coordinates.
+    // Build new markers.
     for (const m of markers) {
       const [x, y, z] = m.center;
+      const [dotOp, haloOp, stalkOp] = STATUS_FADE[m.tracking_status ?? "tracked"];
+
+      const dotMat = new THREE.MeshBasicMaterial({
+        color: 0x74f7d0,
+        transparent: true,
+        opacity: dotOp,
+      });
+      const stalkMat = new THREE.LineBasicMaterial({
+        color: 0x2f6757,
+        transparent: true,
+        opacity: stalkOp,
+      });
+      const haloMat = new THREE.MeshBasicMaterial({
+        color: 0x74f7d0,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: haloOp,
+      });
+
       const item = new THREE.Group();
-      const dot = new THREE.Mesh(this.dotGeo, this.dotMat);
+      const dot = new THREE.Mesh(this.dotGeo, dotMat);
       dot.position.set(x, y, z);
       item.add(dot);
 
@@ -471,22 +499,23 @@ class WorldObjectsLayer {
         new THREE.Vector3(x, y, z),
         new THREE.Vector3(x, 0.002, z),
       ]);
-      item.add(new THREE.Line(stalkGeo, this.stalkMat));
+      item.add(new THREE.Line(stalkGeo, stalkMat));
 
       // Ground halo at the foot of the stalk.
-      const halo = new THREE.Mesh(this.haloGeo, this.haloMat);
+      const halo = new THREE.Mesh(this.haloGeo, haloMat);
       halo.rotation.x = -Math.PI / 2;
       halo.position.set(x, 0.003, z);
       item.add(halo);
 
-      // Labels live in the Readouts panel rather than as in-scene sprites —
-      // multiple canvas-backed sprites in close proximity proved flaky in
-      // headless renderers, and the panel is the canonical place to inspect
-      // per-object metrics anyway.
+      // Labels live in the Readouts panel — see App.vue.
       void m.label;
 
       this.group.add(item);
-      this.items.push(item);
+      this.items.push({
+        group: item,
+        mats: [dotMat, stalkMat, haloMat],
+        geos: [stalkGeo],
+      });
     }
   }
 }

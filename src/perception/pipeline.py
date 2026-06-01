@@ -23,7 +23,9 @@ if TYPE_CHECKING:
         ObjectLifter,
         ObjectState3D,
         PoseSource,
+        SemanticMap,
     )
+    from ..tracking import Tracker
 
 log = logging.getLogger("pet_agent.perception")
 
@@ -142,6 +144,37 @@ class PerceptionPipeline:
         )
         log.info("frame %d: lifted %d / %d objects", frame_id, len(lifted), len(result.objects_2d))
         return result, depth, lifted
+
+    # ── Phase 4: 3D pipeline + tracker + SemanticMap fusion ─────────────────
+    def run_frame_tracked(
+        self,
+        frame_bgr: np.ndarray,
+        prompts: list[str],
+        *,
+        tracker: Tracker,
+        semantic_map: SemanticMap,
+        frame_id: int = 0,
+        intrinsics: CameraIntrinsics | None = None,
+        pose_source: PoseSource | None = None,
+        save_masks: bool = True,
+    ) -> tuple[PerceptionResult, np.ndarray, list[ObjectState3D]]:
+        """Phase 4 hot path: 2D → 3D → track → fuse into SemanticMap.
+
+        Returns the same triple as :meth:`run_frame_3d` but the lifted objects
+        carry stable ``track_NNN`` ids. The ``semantic_map`` parameter is
+        mutated in place (one persistent instance over the whole session).
+        """
+        result, depth, lifted = self.run_frame_3d(
+            frame_bgr,
+            prompts,
+            frame_id=frame_id,
+            intrinsics=intrinsics,
+            pose_source=pose_source,
+            save_masks=save_masks,
+        )
+        tracked = tracker.update(lifted, frame_id)
+        semantic_map.update(tracked, frame_id)
+        return result, depth, tracked
 
     # ── debug visualisation ─────────────────────────────────────────────────
     def visualize(self, frame_bgr: np.ndarray, result: PerceptionResult) -> np.ndarray:

@@ -14,6 +14,8 @@ export interface PetState {
 
 export type Waypoint = [number, number, number];
 
+export type TrackingStatus = "tracked" | "occluded" | "stale" | "lost";
+
 export interface WorldObjectMarker {
   object_id: string;
   class_label: string;
@@ -22,6 +24,8 @@ export interface WorldObjectMarker {
   median_depth?: number;
   depth_uncertainty?: number;
   confidence?: number;
+  tracking_status?: TrackingStatus;
+  last_seen_frame?: number;
 }
 
 export interface PetAction {

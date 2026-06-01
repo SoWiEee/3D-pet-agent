@@ -52,6 +52,7 @@ watch(lastAction, (a: PetAction | null) => {
         center: m.center_3d_world,
         label: m.class_label,
         depth: m.median_depth,
+        tracking_status: m.tracking_status,
       })),
     );
   }

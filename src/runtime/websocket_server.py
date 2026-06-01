@@ -25,11 +25,19 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from ..spatial import SemanticMap
+from ..spatial.object_lifter import ObjectState3D
+from ..tracking import Tracker
 from .pet_runtime import PetAction, PetRuntime
 
 log = logging.getLogger("pet_agent.ws")
 
 runtime = PetRuntime()
+# Server-held tracker + SemanticMap. Phase 4 demo: clients can POST raw
+# lifted JSON, the server tracks ids and fuses positions, and the resulting
+# map is what the frontend renders. The map persists across POSTs.
+tracker = Tracker()
+semantic_map = SemanticMap(map_id="live")
 
 
 @asynccontextmanager
@@ -115,32 +123,71 @@ async def push_perception(payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.post("/perception/lifted")
 async def push_lifted(payload: dict[str, Any]) -> dict[str, Any]:
-    """Accept a Phase 3 lifted JSON and broadcast ``world_update``.
+    """Accept a Phase 3/4 lifted JSON: track ids, fuse into the SemanticMap,
+    broadcast the resulting map as ``world_update``.
 
-    Expects ``{"objects": [ObjectState3D, ...]}`` — exactly the shape the
-    snapshot CLI writes to ``runs/lifted_*.json``.
+    Expects ``{"objects": [ObjectState3D, ...], "frame_id": int?}``.
+    A POST without ``frame_id`` auto-advances by one — useful for stitching
+    independent snapshot runs into a track.
     """
-    objects = payload.get("objects", [])
-    markers: list[dict[str, Any]] = []
-    for o in objects:
-        c3 = o.get("center_3d_world")
-        if not c3:
-            continue
-        markers.append(
-            {
-                "object_id": o.get("object_id", "obj_unknown"),
-                "class_label": o.get("class_label", "object"),
-                "center_3d_world": [float(c3[0]), float(c3[1]), float(c3[2])],
-                "extent_3d": o.get("extent_3d"),
-                "median_depth": o.get("median_depth"),
-                "depth_uncertainty": o.get("depth_uncertainty"),
-                "confidence": (o.get("confidence") or {}).get("overall"),
-            }
-        )
+    raw = payload.get("objects", [])
+    frame_id = int(payload.get("frame_id", semantic_map.last_frame_id + 1))
 
+    detections: list[ObjectState3D] = []
+    for o in raw:
+        if not o.get("center_3d_world"):
+            continue
+        try:
+            detections.append(ObjectState3D(**o))
+        except Exception as e:
+            log.warning("dropping unparseable object: %s", e)
+    tracked = tracker.update(detections, frame_id)
+    semantic_map.update(tracked, frame_id)
+
+    markers = _map_to_markers(semantic_map)
     action = PetAction(action="world_update", world_objects=markers)
     runtime._broadcast(action)  # noqa: SLF001 — runtime exposes this for sibling modules
-    return {"applied": True, "markers": len(markers)}
+    return {
+        "applied": True,
+        "frame_id": frame_id,
+        "raw_detections": len(detections),
+        "tracked": len(tracked),
+        "map_size": len(markers),
+    }
+
+
+@app.get("/semantic/map")
+async def get_semantic_map() -> dict[str, Any]:
+    return semantic_map.to_dict()
+
+
+@app.post("/semantic/reset")
+async def reset_semantic_map() -> dict[str, Any]:
+    tracker.reset()
+    semantic_map.reset()
+    runtime._broadcast(PetAction(action="world_update", world_objects=[]))  # noqa: SLF001
+    return {"reset": True}
+
+
+def _map_to_markers(m: SemanticMap) -> list[dict[str, Any]]:
+    """Convert SemanticMap → frontend marker payload (stable order)."""
+    out: list[dict[str, Any]] = []
+    for o in m.values():
+        c = o.center_3d_world
+        out.append(
+            {
+                "object_id": o.object_id,
+                "class_label": o.class_label,
+                "center_3d_world": [float(c[0]), float(c[1]), float(c[2])],
+                "extent_3d": list(o.extent_3d),
+                "median_depth": o.median_depth,
+                "depth_uncertainty": o.depth_uncertainty,
+                "confidence": o.confidence.overall,
+                "tracking_status": o.tracking_status,
+                "last_seen_frame": o.last_seen_frame,
+            }
+        )
+    return out
 
 
 @app.websocket("/ws/pet")

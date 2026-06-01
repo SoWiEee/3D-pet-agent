@@ -3,6 +3,7 @@
 from .frame_packet import CameraIntrinsics, CameraPoseWorld, FramePacket
 from .object_lifter import ObjectLifter, ObjectState3D
 from .pose_source import FixedPoseSource, PoseSource, SimPoseSource
+from .semantic_map import SemanticMap
 
 __all__ = [
     "CameraIntrinsics",
@@ -13,4 +14,5 @@ __all__ = [
     "PoseSource",
     "FixedPoseSource",
     "SimPoseSource",
+    "SemanticMap",
 ]

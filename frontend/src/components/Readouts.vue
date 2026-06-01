@@ -68,18 +68,26 @@ function fmt(n: number) {
     <div class="card">
       <div class="card__head">
         <span class="card__num">C</span>
-        <span class="card__title">world objects</span>
-        <span class="card__hint">lifted · phase 3</span>
+        <span class="card__title">semantic map</span>
+        <span class="card__hint">tracked · phase 4</span>
       </div>
       <ul class="objs">
-        <li v-for="o in objects" :key="o.object_id" class="obj">
+        <li
+          v-for="o in objects"
+          :key="o.object_id"
+          class="obj"
+          :class="['obj--' + (o.tracking_status ?? 'tracked')]"
+        >
           <span class="obj__dot" />
-          <span class="obj__label">{{ o.class_label }}</span>
+          <span class="obj__label">
+            <em>{{ o.object_id }}</em>
+            <b>{{ o.class_label }}</b>
+          </span>
           <span class="obj__xyz">
             ({{ o.center_3d_world.map((v) => v.toFixed(2)).join(", ") }})
           </span>
         </li>
-        <li v-if="objects.length === 0" class="ev__empty">— no lifted objects —</li>
+        <li v-if="objects.length === 0" class="ev__empty">— no tracked objects —</li>
       </ul>
     </div>
   </section>
@@ -162,6 +170,23 @@ function fmt(n: number) {
   background: var(--c-phosphor);
   box-shadow: 0 0 6px var(--c-phosphor);
 }
-.obj__label { color: var(--c-bone); letter-spacing: 0.08em; }
+.obj__label {
+  display: inline-flex; gap: 6px; align-items: baseline;
+  color: var(--c-bone); letter-spacing: 0.08em;
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.obj__label em {
+  font-style: normal; font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--c-bone-faint); font-variant-numeric: tabular-nums;
+}
+.obj__label b { font-weight: 500; }
 .obj__xyz { color: var(--c-phosphor); font-variant-numeric: tabular-nums; }
+
+/* Tracking-status fade — mirrors WorldObjectsLayer envelope. */
+.obj--occluded { opacity: 0.72; }
+.obj--occluded .obj__dot { box-shadow: 0 0 4px rgba(116, 247, 208, 0.6); }
+.obj--stale    { opacity: 0.45; }
+.obj--stale    .obj__dot { background: #3a8a76; box-shadow: none; }
+.obj--lost     { opacity: 0.25; }
+.obj--lost     .obj__dot { background: #2c5f53; box-shadow: none; }
 </style>

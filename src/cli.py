@@ -51,6 +51,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=60.0,
         help="estimated camera horizontal FOV in degrees (used when no intrinsics file)",
     )
+    p.add_argument(
+        "--track",
+        action="store_true",
+        help="snapshot mode: also feed lifted objects through the Phase 4 tracker + SemanticMap "
+             "(writes runs/semantic_map_<image>.json)",
+    )
+    p.add_argument(
+        "--frames",
+        type=int,
+        default=1,
+        help="snapshot --track: replay the same image N times to demonstrate id persistence",
+    )
     # Demo
     p.add_argument("--camera", type=int, default=0)
     return p
@@ -119,27 +131,52 @@ def run_snapshot(args: argparse.Namespace, cfg: AppConfig) -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     out_json = args.out / f"snapshot_{args.image.stem}.json"
 
-    if args.lift:
+    if args.lift or args.track:
         from PIL import Image
 
-        from .spatial import CameraIntrinsics, FixedPoseSource
+        from .spatial import CameraIntrinsics, FixedPoseSource, SemanticMap
+        from .tracking import Tracker
 
         intrinsics = CameraIntrinsics.from_fov(
             image_size=frame.shape[:2], horizontal_fov_deg=args.fov
         )
-        result, depth, lifted = pipeline.run_frame_3d(
-            frame,
-            prompts=prompts,
-            frame_id=0,
-            intrinsics=intrinsics,
-            pose_source=FixedPoseSource(),
-        )
+
+        if args.track:
+            tracker = Tracker(
+                min_iou=cfg.thresholds.tracking.min_iou,
+                max_center_distance=cfg.thresholds.tracking.max_center_distance,
+                persistence_frames=cfg.thresholds.tracking.persistence_frames,
+            )
+            smap = SemanticMap(map_id=f"snapshot_{args.image.stem}")
+            n_frames = max(1, args.frames)
+            for fi in range(n_frames):
+                result, depth, tracked = pipeline.run_frame_tracked(
+                    frame,
+                    prompts=prompts,
+                    tracker=tracker,
+                    semantic_map=smap,
+                    frame_id=fi,
+                    intrinsics=intrinsics,
+                    pose_source=FixedPoseSource(),
+                    save_masks=(fi == 0),  # masks are deterministic; write once
+                )
+            lifted = smap.values()
+        else:
+            result, depth, lifted = pipeline.run_frame_3d(
+                frame,
+                prompts=prompts,
+                frame_id=0,
+                intrinsics=intrinsics,
+                pose_source=FixedPoseSource(),
+            )
+            smap = None
+
         out_json.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
         lifted_json = args.out / f"lifted_{args.image.stem}.json"
         lifted_json.write_text(
             json.dumps(
                 {
-                    "frame_id": 0,
+                    "frame_id": result.frame_id,
                     "image_size": list(result.image_size),
                     "intrinsics": intrinsics.model_dump(),
                     "objects": [o.to_dict() for o in lifted],
@@ -148,6 +185,10 @@ def run_snapshot(args: argparse.Namespace, cfg: AppConfig) -> int:
             ),
             encoding="utf-8",
         )
+        if smap is not None:
+            map_json = args.out / f"semantic_map_{args.image.stem}.json"
+            smap.save(map_json)
+            log.info("wrote %s (%d objects)", map_json, len(smap.objects))
         log.info(
             "wrote %s (%d objects) + %s (%d lifted)",
             out_json, len(result.objects_2d), lifted_json, len(lifted),
