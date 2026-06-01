@@ -7,7 +7,7 @@ so non-developers can tune thresholds without touching code.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -98,6 +98,34 @@ class RuntimeConfig(BaseModel):
     server: ServerSection
 
 
+class NavigationGridConfig(BaseModel):
+    resolution: float = 0.05
+    origin_x: float = -3.0
+    origin_z: float = -4.0
+    width: int = 120
+    height: int = 120
+    obstacle_padding: float = 0.15
+
+
+class NavigationPlannerConfig(BaseModel):
+    connectivity: int = 8
+    nearest_free_radius: float = 1.0
+    smoothing: Literal["line_of_sight", "none"] = "line_of_sight"
+    smoothing_subdivisions: int = 0
+    default_speed: float = 0.45
+    goal_tolerance: float = 0.10
+
+
+class NavigationConstraintsConfig(BaseModel):
+    avoid_default_min_distance: float = 0.25
+
+
+class NavigationConfig(BaseModel):
+    grid: NavigationGridConfig = Field(default_factory=NavigationGridConfig)
+    planner: NavigationPlannerConfig = Field(default_factory=NavigationPlannerConfig)
+    constraints: NavigationConstraintsConfig = Field(default_factory=NavigationConstraintsConfig)
+
+
 class Settings(BaseSettings):
     """Environment overrides — see spec §16 (PET_AGENT_ prefix)."""
 
@@ -125,6 +153,15 @@ def load_runtime(config_dir: Path = CONFIG_DIR) -> RuntimeConfig:
     return RuntimeConfig(**_load_yaml(config_dir / "runtime.yaml"))
 
 
+def load_navigation(config_dir: Path = CONFIG_DIR) -> NavigationConfig:
+    """Phase 7: navigation config is optional — fall back to NavigationConfig
+    defaults so existing test fixtures don't have to ship the file."""
+    path = config_dir / "navigation.yaml"
+    if not path.exists():
+        return NavigationConfig()
+    return NavigationConfig(**_load_yaml(path))
+
+
 def load_prompts(config_dir: Path = CONFIG_DIR) -> list[str]:
     path = config_dir / "prompts.txt"
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -136,6 +173,7 @@ class AppConfig(BaseModel):
     models: ModelsConfig
     thresholds: ThresholdsConfig
     runtime: RuntimeConfig
+    navigation: NavigationConfig = Field(default_factory=NavigationConfig)
     settings: Settings = Field(default_factory=Settings)
 
     @classmethod
@@ -144,4 +182,5 @@ class AppConfig(BaseModel):
             models=load_models(config_dir),
             thresholds=load_thresholds(config_dir),
             runtime=load_runtime(config_dir),
+            navigation=load_navigation(config_dir),
         )

@@ -26,8 +26,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from ..config import load_navigation
 from ..language import parse_command
-from ..planning import GroundingResolver
+from ..planning import GridConfig, GroundingResolver, Planner, PlannerConfig
 from ..spatial import SceneGraphBuilder, SemanticMap
 from ..spatial.object_lifter import ObjectState3D
 from ..tracking import Tracker
@@ -36,14 +37,35 @@ from .pet_runtime import PetAction, PetRuntime
 log = logging.getLogger("pet_agent.ws")
 
 runtime = PetRuntime()
-# Server-held tracker + SemanticMap + SceneGraphBuilder + GroundingResolver.
-# Phase 4–6 demo: clients POST lifted JSON, the server tracks ids, fuses into
-# the map, rebuilds the scene graph, broadcasts both to the renderer; user
-# utterances POSTed to /command parse → ground → emit move_to + speech.
+# Server-held tracker + SemanticMap + SceneGraphBuilder + GroundingResolver +
+# Planner. Phase 4–7 demo: clients POST lifted JSON, the server tracks ids,
+# fuses into the map, rebuilds the scene graph, broadcasts both to the
+# renderer; user utterances POSTed to /command parse → ground → plan →
+# emit move_follow_path (or move_to if planner has no goal cell).
 tracker = Tracker()
 semantic_map = SemanticMap(map_id="live")
 scene_graph_builder = SceneGraphBuilder()
 grounding_resolver = GroundingResolver()
+
+_nav_cfg = load_navigation()
+planner = Planner(
+    PlannerConfig(
+        grid=GridConfig(
+            resolution=_nav_cfg.grid.resolution,
+            origin_x=_nav_cfg.grid.origin_x,
+            origin_z=_nav_cfg.grid.origin_z,
+            width=_nav_cfg.grid.width,
+            height=_nav_cfg.grid.height,
+            obstacle_padding=_nav_cfg.grid.obstacle_padding,
+        ),
+        connectivity=_nav_cfg.planner.connectivity,
+        nearest_free_radius_m=_nav_cfg.planner.nearest_free_radius,
+        smoothing=_nav_cfg.planner.smoothing,
+        smoothing_subdivisions=_nav_cfg.planner.smoothing_subdivisions,
+        avoid_default_min_distance=_nav_cfg.constraints.avoid_default_min_distance,
+    )
+)
+_default_speed = _nav_cfg.planner.default_speed
 
 
 @asynccontextmanager
@@ -178,6 +200,19 @@ async def get_scene_graph() -> dict[str, Any]:
     return scene_graph_builder.build(semantic_map).to_dict()
 
 
+@app.get("/planning/occupancy")
+async def get_occupancy_grid() -> dict[str, Any]:
+    """Phase 7 debug overlay: current occupancy grid serialised for the UI.
+
+    Excludes nothing; pass ``?exclude=track_001`` later if we add per-target
+    visualisation. Returned shape matches ``OccupancyGrid.to_dict``.
+    """
+    from ..planning import build_occupancy_grid
+
+    grid = build_occupancy_grid(semantic_map, cfg=planner.cfg.grid)
+    return grid.to_dict()
+
+
 @app.post("/semantic/reset")
 async def reset_semantic_map() -> dict[str, Any]:
     tracker.reset()
@@ -196,10 +231,12 @@ class CommandRequest(BaseModel):
 async def push_command(req: CommandRequest) -> dict[str, Any]:
     """Phase 6: parse a user utterance and ground it against the live map.
 
-    On success, emits an ``ask`` (explanation in the speech bubble) and a
-    movement action. ``move_to`` for now — the Phase 7 planner will produce a
-    proper ``move_follow_path`` once the occupancy grid is in. On
-    clarification, only the ``ask`` is emitted so the user can refine.
+    On success, emits an ``ask`` (explanation in the speech bubble) plus a
+    planned ``move_follow_path``. Phase 7's planner consumes the
+    NavigationGoal, builds an occupancy grid from the live SemanticMap, runs
+    A* + LOS smoothing, and hands the path here. If the planner can't reach
+    the goal we still emit the ``ask`` so the user gets the structured
+    failure reason — no silent fallthrough.
     """
     intent = parse_command(req.text)
     if intent is None:
@@ -236,19 +273,59 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
     goal = result.goal
     assert goal is not None
     runtime.ask(goal.explanation)
+
     if intent.intent_type == "stop":
         runtime.play_animation("sit")
-    elif intent.intent_type == "look_at" and goal.target_position_world is not None:
+        return {
+            "parsed": True,
+            "intent": intent.model_dump(),
+            "status": result.status,
+            "goal": goal.model_dump(),
+        }
+
+    if intent.intent_type == "look_at" and goal.target_position_world is not None:
         x, y, z = goal.target_position_world
         runtime.look_at(x, y, z)
-    elif goal.target_position_world is not None:
-        x, y, z = goal.target_position_world
-        runtime.move_to(x, y, z, speed=0.6)
+        return {
+            "parsed": True,
+            "intent": intent.model_dump(),
+            "status": result.status,
+            "goal": goal.model_dump(),
+        }
+
+    if goal.target_position_world is None:
+        # No-target goals (explore / report) — caller-side animation only.
+        return {
+            "parsed": True,
+            "intent": intent.model_dump(),
+            "status": result.status,
+            "goal": goal.model_dump(),
+        }
+
+    plan = planner.plan(goal, semantic_map, start_world=runtime.state.position.as_tuple())
+    if plan.status != "success" or not plan.path_world:
+        # Surface the planner's structured failure to the user instead of
+        # silently teleporting the cat.
+        runtime.ask(f"I can't plan a path there ({plan.status}).")
+        return {
+            "parsed": True,
+            "intent": intent.model_dump(),
+            "status": "plan_failed",
+            "planner_status": plan.status,
+            "goal": goal.model_dump(),
+        }
+    runtime.move_follow_path(
+        plan.path_world,
+        speed=_default_speed,
+        look_at_object_id=goal.target_object_id,
+    )
     return {
         "parsed": True,
         "intent": intent.model_dump(),
         "status": result.status,
         "goal": goal.model_dump(),
+        "planner_status": plan.status,
+        "path_waypoints": len(plan.path_world),
     }
 
 

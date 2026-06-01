@@ -1,0 +1,22 @@
+# Navigation / planning configuration (spec §10).
+#
+# The occupancy grid sits in the world XZ plane (Y is up). Origin is the
+# minimum corner; ``width`` and ``height`` are cell counts.
+grid:
+  resolution: 0.05       # metres per cell
+  origin_x: -3.0
+  origin_z: -4.0
+  width: 120             # 6.0 m of X
+  height: 120            # 6.0 m of Z (mostly negative — camera looks down -Z)
+  obstacle_padding: 0.15 # extra inflation around every obstacle, m
+
+planner:
+  connectivity: 8        # 8-connectivity grid; 4 disables diagonals
+  nearest_free_radius: 1.0 # m — search ring when goal cell is blocked
+  smoothing: line_of_sight  # ``line_of_sight`` | ``none``
+  smoothing_subdivisions: 0  # extra interpolated waypoints between LOS nodes
+  default_speed: 0.45
+  goal_tolerance: 0.10   # planning stops when within this metres of goal
+
+constraints:
+  avoid_default_min_distance: 0.25  # used if a CommandIntent ``avoid`` carries none
