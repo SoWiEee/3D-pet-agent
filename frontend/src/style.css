@@ -1,0 +1,113 @@
+:root {
+  /* ── Perceptual Console palette ─────────────────────────────────────── */
+  --c-ink-0: #07090a;          /* deepest background */
+  --c-ink-1: #0c1112;          /* panel */
+  --c-ink-2: #11181a;          /* raised */
+  --c-line: #1f2a2c;           /* hairline */
+  --c-line-strong: #2a3a3d;
+  --c-bone: #e7e1c8;           /* off-white text */
+  --c-bone-dim: #a39d86;
+  --c-bone-faint: #555044;
+  --c-phosphor: #74f7d0;       /* cool phosphor */
+  --c-phosphor-dim: #2f6757;
+  --c-amber: #ffb45a;          /* warn */
+  --c-coral: #ff6e57;          /* error */
+
+  --f-display: "Major Mono Display", ui-monospace, monospace;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+  --f-serif: "Cormorant Garamond", "Iowan Old Style", serif;
+
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; }
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 700px at 75% -10%, #0d1a18 0%, transparent 60%),
+    radial-gradient(900px 600px at -5% 110%, #0e1614 0%, transparent 60%),
+    var(--c-ink-0);
+  color: var(--c-bone);
+  font-family: var(--f-mono);
+  font-weight: 400;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Faint scanline overlay across the entire app, fixed in viewport. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.012) 0 1px,
+    transparent 1px 3px
+  );
+  mix-blend-mode: screen;
+}
+
+/* Subtle grain via SVG noise. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9998;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='1.4' numOctaves='2' seed='3'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.55 0'/></filter><rect width='160' height='160' filter='url(%23n)'/></svg>");
+}
+
+/* Selection. */
+::selection { background: var(--c-phosphor); color: #001512; }
+
+/* Buttons / inputs base. */
+button, input, textarea {
+  font-family: var(--f-mono);
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--c-line);
+  outline: none;
+}
+
+button {
+  cursor: pointer;
+  padding: 6px 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+button:hover {
+  background: var(--c-phosphor);
+  color: #00120e;
+  border-color: var(--c-phosphor);
+}
+button:focus-visible {
+  border-color: var(--c-phosphor);
+}
+
+input[type="text"] {
+  padding: 8px 10px;
+}
+
+/* Reusable utility tokens. */
+.tag {
+  display: inline-block;
+  padding: 2px 6px;
+  border: 1px solid var(--c-line-strong);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--c-bone-dim);
+}
+.tag--phosphor { color: var(--c-phosphor); border-color: var(--c-phosphor-dim); }
+.tag--amber { color: var(--c-amber); border-color: #6a4a1c; }
+.tag--coral { color: var(--c-coral); border-color: #6a3024; }
+
+.hairline { height: 1px; background: var(--c-line); }

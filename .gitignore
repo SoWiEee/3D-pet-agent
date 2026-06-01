@@ -3,3 +3,12 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 CLAUDE.md
+.venv/
+runs/
+node_modules/
+dist/
+.DS_Store
+*.egg-info/
+.vscode/
+.idea/
+weights/

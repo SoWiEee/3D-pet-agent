@@ -1,0 +1,19 @@
+# Threshold configuration (spec §16.2)
+grounding:
+  min_final_score: 0.65
+  ambiguity_margin: 0.12
+
+tracking:
+  backend: simple_iou_then_bytetrack
+  min_iou: 0.35
+  max_center_distance: 0.20
+  persistence_frames: 3
+
+relations:
+  near_sigma: 0.50
+  right_left_threshold: 0.08
+  behind_front_threshold: 0.10
+
+behavior:
+  safe_distance: 0.15
+  default_speed: 0.8

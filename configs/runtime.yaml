@@ -1,0 +1,12 @@
+# Runtime configuration (spec §16.3)
+runtime:
+  perception_update_hz: 2
+  tracking_update_hz: 10
+  renderer_fps: 60
+  save_debug_outputs: true
+  ask_clarification: true
+
+server:
+  host: 127.0.0.1
+  http_port: 8000
+  ws_path: /ws/pet

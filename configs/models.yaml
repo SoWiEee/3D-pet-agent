@@ -1,0 +1,22 @@
+# Model configuration (spec §16.1)
+detector:
+  name: groundingdino
+  hf_model_id: IDEA-Research/grounding-dino-tiny
+  device: cuda
+  box_threshold: 0.30
+  text_threshold: 0.25
+
+segmenter:
+  name: sam
+  hf_model_id: facebook/sam-vit-base
+  device: cuda
+
+depth:
+  name: depth_anything_v2
+  hf_model_id: depth-anything/Depth-Anything-V2-Small-hf
+  device: cuda
+  mode: relative
+
+openscene:
+  enabled: false
+  scene_root: data/openscene
