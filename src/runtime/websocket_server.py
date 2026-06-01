@@ -34,6 +34,12 @@ from ..control import (
     PurePursuitController,
     UnicycleState,
 )
+from ..exploration import (
+    CoverageGrid,
+    CoverageGridConfig,
+    ExplorationGoal,
+    ExplorationPlanner,
+)
 from ..language import parse_command
 from ..planning import GridConfig, GroundingResolver, Planner, PlannerConfig
 from ..spatial import SceneGraphBuilder, SemanticMap
@@ -102,6 +108,23 @@ path_follower = PathFollower(
 
 # Sticky last trace for debug overlay.
 _last_trace_summary: dict[str, Any] | None = None
+
+# ── Phase 9: exploration ────────────────────────────────────────────────────
+# Coverage grid aligned with the navigation grid so unobserved cells are
+# discoverable in the same coordinate frame.
+coverage_grid = CoverageGrid(
+    CoverageGridConfig(
+        resolution=_nav_cfg.grid.resolution,
+        origin_x=_nav_cfg.grid.origin_x,
+        origin_z=_nav_cfg.grid.origin_z,
+        width=_nav_cfg.grid.width,
+        height=_nav_cfg.grid.height,
+    )
+)
+exploration_planner = ExplorationPlanner()
+# Object ids seen prior to the last exploration tick; used to report what was
+# newly discovered during the step.
+_last_exploration_ids: set[str] = set()
 
 
 @asynccontextmanager
@@ -329,8 +352,28 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
             "goal": goal.model_dump(),
         }
 
+    if intent.intent_type == "explore":
+        # Phase 9: pick a viewpoint goal from the live coverage + map and
+        # drive to it via the standard planner → controller pipeline.
+        target_class = intent.target.class_label if intent.target else None
+        ex_goal = exploration_planner.next_goal(
+            semantic_map,
+            coverage_grid,
+            cat_xz=(runtime.state.position.x, runtime.state.position.z),
+            target_class=target_class,
+        )
+        if ex_goal is None:
+            runtime.ask("The map looks fully explored — nothing more to inspect.")
+            return {
+                "parsed": True,
+                "intent": intent.model_dump(),
+                "status": "fully_explored",
+                "goal": goal.model_dump(),
+            }
+        return _execute_exploration_goal(intent, ex_goal)
+
     if goal.target_position_world is None:
-        # No-target goals (explore / report) — caller-side animation only.
+        # No-target goals (report etc.) — caller-side animation only.
         return {
             "parsed": True,
             "intent": intent.model_dump(),
@@ -379,6 +422,67 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
     }
 
 
+def _execute_exploration_goal(intent: Any, ex_goal: ExplorationGoal) -> dict[str, Any]:
+    """Route an :class:`ExplorationGoal` through the planner + controller.
+
+    Failures from the planner are surfaced via ``runtime.ask`` and reported
+    back to the caller so the user sees structured feedback rather than a
+    silent no-op. On success, any objects newly discovered since the last
+    exploration tick are mentioned in the speech bubble.
+    """
+    global _last_exploration_ids, _last_trace_summary
+    nav_goal = ex_goal.to_navigation_goal()
+    runtime.ask(ex_goal.explanation)
+    plan = planner.plan(nav_goal, semantic_map, start_world=runtime.state.position.as_tuple())
+    if plan.status != "success" or not plan.path_world:
+        runtime.ask(f"I can't plan a path there ({plan.status}).")
+        return {
+            "parsed": True,
+            "intent": intent.model_dump(),
+            "status": "plan_failed",
+            "planner_status": plan.status,
+            "exploration_goal": {
+                "kind": ex_goal.kind,
+                "target_position_world": list(ex_goal.target_position_world),
+                "score": ex_goal.score,
+                "related_object_id": ex_goal.related_object_id,
+            },
+        }
+    initial = _initial_state_from_plan(plan.path_world)
+    trace = path_follower.simulate(plan.path_world, initial)
+    _last_trace_summary = _trace_summary_dict(trace.summary, plan.path_world)
+
+    current_ids = {o.object_id for o in semantic_map.values()}
+    discovered = sorted(current_ids - _last_exploration_ids)
+    _last_exploration_ids = current_ids
+    if discovered:
+        runtime.ask("I found: " + ", ".join(discovered[:5]) + ("…" if len(discovered) > 5 else ""))
+
+    runtime.move_follow_path(
+        trace.path_world,
+        speed=_ctrl_cfg.pure_pursuit.base_speed,
+        look_at_object_id=ex_goal.related_object_id,
+        controller_trace=_last_trace_summary,
+    )
+    return {
+        "parsed": True,
+        "intent": intent.model_dump(),
+        "status": "success",
+        "exploration_goal": {
+            "kind": ex_goal.kind,
+            "target_position_world": list(ex_goal.target_position_world),
+            "score": ex_goal.score,
+            "related_object_id": ex_goal.related_object_id,
+            "explanation": ex_goal.explanation,
+        },
+        "planner_status": plan.status,
+        "path_waypoints": len(plan.path_world),
+        "control_steps": trace.summary.steps,
+        "control_status": trace.summary.status,
+        "discovered_object_ids": discovered,
+    }
+
+
 def _initial_state_from_plan(path_world: list[tuple[float, float, float]]) -> UnicycleState:
     """Build an :class:`UnicycleState` from the cat's current position and the
     planner-supplied path direction.
@@ -418,6 +522,71 @@ def _trace_summary_dict(
 async def get_last_control_trace() -> dict[str, Any]:
     """Phase 8 debug endpoint. Empty dict when no command has been planned yet."""
     return _last_trace_summary or {}
+
+
+class ObserveConeRequest(BaseModel):
+    camera_xz: tuple[float, float]
+    heading_rad: float
+    fov_rad: float
+    range_m: float
+
+
+@app.post("/exploration/observe")
+async def post_observe(req: ObserveConeRequest) -> dict[str, Any]:
+    """Mark a viewpoint cone as observed in the coverage grid."""
+    new_cells = coverage_grid.observe_cone(
+        camera_xz=req.camera_xz,
+        heading=req.heading_rad,
+        fov_rad=req.fov_rad,
+        range_m=req.range_m,
+    )
+    return {
+        "new_cells": new_cells,
+        "unobserved_ratio": coverage_grid.unobserved_ratio(),
+    }
+
+
+class ExplorationStepRequest(BaseModel):
+    target_class: str | None = None
+
+
+@app.post("/exploration/step")
+async def post_exploration_step(req: ExplorationStepRequest) -> dict[str, Any]:
+    """Pick the next exploration goal and drive to it via planner+controller."""
+    ex_goal = exploration_planner.next_goal(
+        semantic_map,
+        coverage_grid,
+        cat_xz=(runtime.state.position.x, runtime.state.position.z),
+        target_class=req.target_class,
+    )
+    if ex_goal is None:
+        runtime.ask("The map looks fully explored — nothing more to inspect.")
+        return {"status": "fully_explored"}
+
+    # Fake an "intent.model_dump()" wrapper since this endpoint bypasses
+    # /command. We pass a minimal stand-in object the helper can dump.
+    class _Stub:
+        def model_dump(self) -> dict[str, Any]:
+            return {
+                "intent_type": "explore",
+                "target_class": req.target_class,
+                "source": "exploration/step",
+            }
+
+    return _execute_exploration_goal(_Stub(), ex_goal)
+
+
+@app.get("/exploration/coverage")
+async def get_coverage_grid() -> dict[str, Any]:
+    return coverage_grid.to_dict()
+
+
+@app.post("/exploration/reset")
+async def reset_exploration() -> dict[str, Any]:
+    global _last_exploration_ids
+    coverage_grid.reset()
+    _last_exploration_ids = set()
+    return {"reset": True}
 
 
 class SimulateRequest(BaseModel):
