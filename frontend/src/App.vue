@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { PetScene } from "./renderer/PetScene";
-import { usePetSocket, type PetAction, type WorldObjectMarker } from "./composables/useWebSocket";
+import {
+  usePetSocket,
+  type PetAction,
+  type SceneGraphPayload,
+  type WorldObjectMarker,
+} from "./composables/useWebSocket";
 import StatusBar from "./components/StatusBar.vue";
 import ModulePanel from "./components/ModulePanel.vue";
 import Readouts from "./components/Readouts.vue";
@@ -15,6 +20,7 @@ let scene: PetScene | null = null;
 const wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/pet`;
 const { status, petState, history, lastAction, send } = usePetSocket(wsUrl);
 const worldObjects = shallowRef<WorldObjectMarker[]>([]);
+const sceneGraph = shallowRef<SceneGraphPayload | null>(null);
 
 onMounted(() => {
   if (!viewport.value) return;
@@ -55,6 +61,27 @@ watch(lastAction, (a: PetAction | null) => {
         tracking_status: m.tracking_status,
       })),
     );
+    if (a.scene_graph) {
+      sceneGraph.value = a.scene_graph;
+      const byId = new Map(a.world_objects.map((m) => [m.object_id, m.center_3d_world]));
+      // Pair edges only — between-edges drawn in panel, not as a single line.
+      const topPairs = a.scene_graph.relations
+        .filter((r) => r.relation !== "between" && !r.object_2)
+        .slice(0, 24);
+      scene.setSceneGraph(
+        topPairs
+          .map((r) => {
+            const from = byId.get(r.subject);
+            const to = byId.get(r.object);
+            if (!from || !to) return null;
+            return { from, to, score: r.score };
+          })
+          .filter((e): e is NonNullable<typeof e> => e !== null),
+      );
+    } else {
+      sceneGraph.value = null;
+      scene.setSceneGraph([]);
+    }
   }
 });
 
@@ -63,7 +90,7 @@ const modules = computed(() => [
   { name: "segmenter · sam", status: status.value === "open" ? "online" as const : "idle" as const, note: "promptable · box → mask" },
   { name: "depth · anything v2", status: status.value === "open" ? "online" as const : "idle" as const, note: "monocular · depth-anything-v2-small" },
   { name: "tracker · iou+bytetrack", status: "off" as const, note: "phase 4" },
-  { name: "scene graph", status: "off" as const, note: "phase 5" },
+  { name: "scene graph", status: status.value === "open" ? "online" as const : "idle" as const, note: "phase 5 · 11 relations" },
   { name: "command parser", status: "off" as const, note: "phase 6 · using rule fallback" },
 ]);
 
@@ -100,7 +127,12 @@ const speechText = computed(() => petState.value?.speech ?? null);
       </div>
     </section>
 
-    <Readouts :state="petState" :history="history" :world-objects="worldObjects" />
+    <Readouts
+      :state="petState"
+      :history="history"
+      :world-objects="worldObjects"
+      :scene-graph="sceneGraph"
+    />
     <CommandBar @send="onCommand" />
   </main>
 </template>

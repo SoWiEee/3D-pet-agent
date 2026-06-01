@@ -69,6 +69,9 @@ class PetAction(BaseModel):
     state: PetState | None = None
     # Phase 3: lifted 3D centroids broadcast as a world update.
     world_objects: list[dict[str, Any]] | None = None
+    # Phase 5: scene graph snapshot (edges over world_objects) — piggybacks on
+    # the world_update broadcast so renderers can draw both atomically.
+    scene_graph: dict[str, Any] | None = None
     timestamp: float = Field(default_factory=time.time)
 
 

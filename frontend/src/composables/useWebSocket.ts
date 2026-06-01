@@ -28,6 +28,36 @@ export interface WorldObjectMarker {
   last_seen_frame?: number;
 }
 
+export type RelationLabel =
+  | "left_of"
+  | "right_of"
+  | "in_front_of"
+  | "behind"
+  | "above"
+  | "below"
+  | "near"
+  | "far_from"
+  | "on_surface"
+  | "occluding"
+  | "between";
+
+export interface RelationEdge {
+  subject: string;
+  relation: RelationLabel;
+  object: string;
+  object_2?: string | null;
+  score: number;
+  evidence?: Record<string, unknown>;
+}
+
+export interface SceneGraphPayload {
+  timestamp: number;
+  frame_id: number;
+  coordinate_frame: string;
+  objects: string[];
+  relations: RelationEdge[];
+}
+
 export interface PetAction {
   action:
     | "move_to"
@@ -47,6 +77,7 @@ export interface PetAction {
   speech?: string | null;
   state?: PetState | null;
   world_objects?: WorldObjectMarker[] | null;
+  scene_graph?: SceneGraphPayload | null;
   timestamp?: number;
 }
 

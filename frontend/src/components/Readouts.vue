@@ -1,16 +1,23 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { PetState, PetAction, WorldObjectMarker } from "../composables/useWebSocket";
+import type {
+  PetAction,
+  PetState,
+  SceneGraphPayload,
+  WorldObjectMarker,
+} from "../composables/useWebSocket";
 
 const props = defineProps<{
   state: PetState | null;
   history: PetAction[];
   worldObjects?: WorldObjectMarker[];
+  sceneGraph?: SceneGraphPayload | null;
 }>();
 
 const pos = computed(() => props.state?.position ?? { x: 0, y: 0, z: 0 });
 const recent = computed(() => props.history.slice(-9).reverse());
 const objects = computed(() => props.worldObjects ?? []);
+const relations = computed(() => (props.sceneGraph?.relations ?? []).slice(0, 9));
 
 function fmt(n: number) {
   const s = n.toFixed(3);
@@ -65,30 +72,51 @@ function fmt(n: number) {
       </ul>
     </div>
 
-    <div class="card">
-      <div class="card__head">
-        <span class="card__num">C</span>
-        <span class="card__title">semantic map</span>
-        <span class="card__hint">tracked · phase 4</span>
+    <div class="col">
+      <div class="card">
+        <div class="card__head">
+          <span class="card__num">C</span>
+          <span class="card__title">semantic map</span>
+          <span class="card__hint">tracked · phase 4</span>
+        </div>
+        <ul class="objs">
+          <li
+            v-for="o in objects"
+            :key="o.object_id"
+            class="obj"
+            :class="['obj--' + (o.tracking_status ?? 'tracked')]"
+          >
+            <span class="obj__dot" />
+            <span class="obj__label">
+              <em>{{ o.object_id }}</em>
+              <b>{{ o.class_label }}</b>
+            </span>
+            <span class="obj__xyz">
+              ({{ o.center_3d_world.map((v) => v.toFixed(2)).join(", ") }})
+            </span>
+          </li>
+          <li v-if="objects.length === 0" class="ev__empty">— no tracked objects —</li>
+        </ul>
       </div>
-      <ul class="objs">
-        <li
-          v-for="o in objects"
-          :key="o.object_id"
-          class="obj"
-          :class="['obj--' + (o.tracking_status ?? 'tracked')]"
-        >
-          <span class="obj__dot" />
-          <span class="obj__label">
-            <em>{{ o.object_id }}</em>
-            <b>{{ o.class_label }}</b>
-          </span>
-          <span class="obj__xyz">
-            ({{ o.center_3d_world.map((v) => v.toFixed(2)).join(", ") }})
-          </span>
-        </li>
-        <li v-if="objects.length === 0" class="ev__empty">— no tracked objects —</li>
-      </ul>
+
+      <div class="card">
+        <div class="card__head">
+          <span class="card__num">D</span>
+          <span class="card__title">relations</span>
+          <span class="card__hint">scene graph · phase 5</span>
+        </div>
+        <ul class="rels">
+          <li v-for="(r, i) in relations" :key="i" class="rel">
+            <span class="rel__subj">{{ r.subject }}</span>
+            <span class="rel__rel">{{ r.relation }}</span>
+            <span class="rel__obj">
+              {{ r.object }}<template v-if="r.object_2"> + {{ r.object_2 }}</template>
+            </span>
+            <span class="rel__score">{{ r.score.toFixed(2) }}</span>
+          </li>
+          <li v-if="relations.length === 0" class="ev__empty">— no relations —</li>
+        </ul>
+      </div>
     </div>
   </section>
 </template>
@@ -96,12 +124,13 @@ function fmt(n: number) {
 <style scoped>
 .readouts {
   display: grid;
-  grid-template-columns: 260px 1fr 260px;
+  grid-template-columns: 260px 1fr 290px;
   gap: 14px;
   padding: 14px 18px;
   border-top: 1px solid var(--c-line);
   background: linear-gradient(0deg, rgba(7,9,10,0.88), rgba(11,17,18,0.6));
 }
+.col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .card {
   border: 1px solid var(--c-line);
   padding: 10px 12px;
@@ -189,4 +218,22 @@ function fmt(n: number) {
 .obj--stale    .obj__dot { background: #3a8a76; box-shadow: none; }
 .obj--lost     { opacity: 0.25; }
 .obj--lost     .obj__dot { background: #2c5f53; box-shadow: none; }
+
+/* Relations table — subject · relation · object · score. */
+.rels { list-style: none; margin: 0; padding: 0; max-height: 140px; overflow: auto; }
+.rel {
+  display: grid;
+  grid-template-columns: minmax(60px, auto) minmax(70px, auto) 1fr 36px;
+  gap: 8px; align-items: baseline;
+  padding: 3px 0;
+  border-bottom: 1px dotted var(--c-line);
+  font-size: 11px;
+}
+.rel:last-child { border-bottom: 0; }
+.rel__subj, .rel__obj { color: var(--c-bone); font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rel__rel {
+  color: var(--c-phosphor);
+  text-transform: uppercase; letter-spacing: 0.14em; font-size: 10px;
+}
+.rel__score { color: var(--c-phosphor); font-variant-numeric: tabular-nums; text-align: right; }
 </style>

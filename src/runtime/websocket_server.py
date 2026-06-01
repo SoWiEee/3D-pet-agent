@@ -25,7 +25,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from ..spatial import SemanticMap
+from ..spatial import SceneGraphBuilder, SemanticMap
 from ..spatial.object_lifter import ObjectState3D
 from ..tracking import Tracker
 from .pet_runtime import PetAction, PetRuntime
@@ -33,11 +33,12 @@ from .pet_runtime import PetAction, PetRuntime
 log = logging.getLogger("pet_agent.ws")
 
 runtime = PetRuntime()
-# Server-held tracker + SemanticMap. Phase 4 demo: clients can POST raw
-# lifted JSON, the server tracks ids and fuses positions, and the resulting
-# map is what the frontend renders. The map persists across POSTs.
+# Server-held tracker + SemanticMap + SceneGraphBuilder. Phase 4–5 demo: clients
+# POST lifted JSON; the server tracks ids, fuses into the map, rebuilds the
+# scene graph, and broadcasts both to the renderer.
 tracker = Tracker()
 semantic_map = SemanticMap(map_id="live")
+scene_graph_builder = SceneGraphBuilder()
 
 
 @asynccontextmanager
@@ -145,7 +146,12 @@ async def push_lifted(payload: dict[str, Any]) -> dict[str, Any]:
     semantic_map.update(tracked, frame_id)
 
     markers = _map_to_markers(semantic_map)
-    action = PetAction(action="world_update", world_objects=markers)
+    graph = scene_graph_builder.build(semantic_map, frame_id=frame_id)
+    action = PetAction(
+        action="world_update",
+        world_objects=markers,
+        scene_graph=graph.to_dict(),
+    )
     runtime._broadcast(action)  # noqa: SLF001 — runtime exposes this for sibling modules
     return {
         "applied": True,
@@ -153,6 +159,7 @@ async def push_lifted(payload: dict[str, Any]) -> dict[str, Any]:
         "raw_detections": len(detections),
         "tracked": len(tracked),
         "map_size": len(markers),
+        "relations": len(graph.relations),
     }
 
 
@@ -161,11 +168,18 @@ async def get_semantic_map() -> dict[str, Any]:
     return semantic_map.to_dict()
 
 
+@app.get("/scene/graph")
+async def get_scene_graph() -> dict[str, Any]:
+    return scene_graph_builder.build(semantic_map).to_dict()
+
+
 @app.post("/semantic/reset")
 async def reset_semantic_map() -> dict[str, Any]:
     tracker.reset()
     semantic_map.reset()
-    runtime._broadcast(PetAction(action="world_update", world_objects=[]))  # noqa: SLF001
+    runtime._broadcast(  # noqa: SLF001
+        PetAction(action="world_update", world_objects=[], scene_graph=None)
+    )
     return {"reset": True}
 
 

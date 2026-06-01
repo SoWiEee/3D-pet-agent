@@ -19,6 +19,7 @@ export class PetScene {
   cat: Cat;
   targetMarker: TargetMarker;
   worldObjects!: WorldObjectsLayer;
+  relationEdges!: RelationEdgesLayer;
   private clock = new THREE.Clock();
   private tweens = new TweenGroup();
   private activeMotion:
@@ -55,6 +56,8 @@ export class PetScene {
     this.scene.add(this.targetMarker.group);
     this.worldObjects = new WorldObjectsLayer();
     this.scene.add(this.worldObjects.group);
+    this.relationEdges = new RelationEdgesLayer();
+    this.scene.add(this.relationEdges.group);
 
     this.handleResize();
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
@@ -235,6 +238,15 @@ export class PetScene {
     }[],
   ) {
     this.worldObjects.update(markers);
+  }
+
+  /** Phase 5: render top scene-graph edges as faint phosphor lines between
+   * marker centroids. Spatial relations come straight from the SemanticMap,
+   * so the renderer just draws what the backend ranked. */
+  setSceneGraph(
+    edges: { from: [number, number, number]; to: [number, number, number]; score: number }[],
+  ) {
+    this.relationEdges.update(edges);
   }
 
   // ── loop ──────────────────────────────────────────────────────────────
@@ -516,6 +528,46 @@ class WorldObjectsLayer {
         mats: [dotMat, stalkMat, haloMat],
         geos: [stalkGeo],
       });
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Relation edges layer — thin phosphor segments between two world-object
+// centroids, opacity proportional to the relation's score. The backend caps
+// the broadcast to its top edges so this layer stays cheap.
+// ─────────────────────────────────────────────────────────────────────────────
+class RelationEdgesLayer {
+  group = new THREE.Group();
+  private lines: { line: THREE.Line; mat: THREE.LineBasicMaterial; geo: THREE.BufferGeometry }[] =
+    [];
+
+  update(
+    edges: {
+      from: [number, number, number];
+      to: [number, number, number];
+      score: number;
+    }[],
+  ) {
+    for (const item of this.lines) {
+      this.group.remove(item.line);
+      item.mat.dispose();
+      item.geo.dispose();
+    }
+    this.lines = [];
+    for (const e of edges) {
+      const geo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(...e.from),
+        new THREE.Vector3(...e.to),
+      ]);
+      const mat = new THREE.LineBasicMaterial({
+        color: 0x74f7d0,
+        transparent: true,
+        opacity: Math.max(0.15, Math.min(0.7, e.score * 0.7)),
+      });
+      const line = new THREE.Line(geo, mat);
+      this.group.add(line);
+      this.lines.push({ line, mat, geo });
     }
   }
 }
