@@ -286,20 +286,34 @@ class RuleCommandParser:
         return None
 
 
-def _llm_parse(text: str) -> CommandIntent | None:
-    """LLM adapter placeholder. Returns None unless an LLM is wired in.
-
-    The hook exists so Phase 6 ships a clean fallback path: when an external
-    adapter (OpenAI/Anthropic/local) is wired in here, it must validate its
-    JSON output against ``CommandIntent`` and return ``None`` on any failure
-    so the rule parser takes over.
-    """
-    _ = text
-    return None
-
-
 # Module-level convenience used by the server endpoint.
 _DEFAULT_PARSER = RuleCommandParser()
+
+# Lazily built so importing this module never instantiates the LLM client.
+_LLM_PARSER = None
+
+
+def _get_llm_parser():  # type: ignore[no-untyped-def]
+    """Cache one :class:`LLMCommandParser` instance — heavy SDK import lives
+    inside it, so we only pay the cost when LLM mode is actually used."""
+    global _LLM_PARSER
+    if _LLM_PARSER is None:
+        from .llm_parser import LLMCommandParser
+
+        _LLM_PARSER = LLMCommandParser()
+    return _LLM_PARSER
+
+
+def _llm_parse(text: str) -> CommandIntent | None:
+    """Try the LLM adapter. Returns None on any failure so the rule parser
+    runs. Network / SDK errors are swallowed by :class:`LLMCommandParser`
+    itself — this wrapper only protects against import-time errors."""
+    try:
+        parser = _get_llm_parser()
+    except Exception as e:  # noqa: BLE001
+        log.warning("LLM parser bootstrap failed (%s); rule parser will run", e)
+        return None
+    return parser.parse(text)
 
 
 def parse_command(text: str) -> CommandIntent | None:
