@@ -10,19 +10,8 @@ from src.control.kinematic import UnicycleState
 from src.runtime import websocket_server as srv
 
 
-def _client() -> TestClient:
-    srv.runtime.state.position.x = 0.0
-    srv.runtime.state.position.y = 0.0
-    srv.runtime.state.position.z = 0.0
-    srv.semantic_map.reset()
-    srv.tracker.reset()
-    srv._last_trace_summary = None
-    return TestClient(srv.app)
-
-
-def test_simulate_endpoint_returns_summary_and_dense_path() -> None:
-    c = _client()
-    resp = c.post(
+def test_simulate_endpoint_returns_summary_and_dense_path(client: TestClient) -> None:
+    resp = client.post(
         "/control/simulate",
         json={
             "path": [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
@@ -36,29 +25,25 @@ def test_simulate_endpoint_returns_summary_and_dense_path() -> None:
     assert len(body["path_world"]) > 2  # densified beyond the 2 raw waypoints
 
 
-def test_simulate_with_empty_path_handled_gracefully() -> None:
-    c = _client()
-    resp = c.post("/control/simulate", json={"path": []})
+def test_simulate_with_empty_path_handled_gracefully(client: TestClient) -> None:
+    resp = client.post("/control/simulate", json={"path": []})
     assert resp.status_code == 200
     assert resp.json()["status"] == "empty_path"
 
 
-def test_perception_status_endpoint_when_not_running() -> None:
-    c = _client()
-    body = c.get("/perception/status").json()
+def test_perception_status_endpoint_when_not_running(client: TestClient) -> None:
+    body = client.get("/perception/status").json()
     assert body["available"] is True
     assert body["running"] is False
 
 
-def test_perception_stop_when_not_running() -> None:
-    c = _client()
-    body = c.post("/perception/stop").json()
+def test_perception_stop_when_not_running(client: TestClient) -> None:
+    body = client.post("/perception/stop").json()
     assert body["stopped"] is False
 
 
-def test_last_trace_endpoint_starts_empty() -> None:
-    c = _client()
-    body = c.get("/control/last_trace").json()
+def test_last_trace_endpoint_starts_empty(client: TestClient) -> None:
+    body = client.get("/control/last_trace").json()
     assert body == {}
 
 
@@ -86,10 +71,9 @@ def _lift_one_cup(c: TestClient, x: float = 0.6, z: float = 0.8) -> None:
     )
 
 
-def test_command_success_returns_reasoning_fields() -> None:
-    c = _client()
-    _lift_one_cup(c)
-    body = c.post("/command", json={"text": "go to the cup"}).json()
+def test_command_success_returns_reasoning_fields(client: TestClient) -> None:
+    _lift_one_cup(client)
+    body = client.post("/command", json={"text": "go to the cup"}).json()
     assert body["parsed"] is True
     assert body["status"] == "success"
     # Reasoning panel payload.

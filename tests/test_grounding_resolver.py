@@ -7,7 +7,8 @@ import pytest
 from src.language import RuleCommandParser
 from src.planning import GroundingResolver, NavigationGoal
 from src.spatial import SceneGraphBuilder, SemanticMap
-from src.spatial.object_lifter import ObjectConfidence, ObjectState3D
+from src.spatial.object_lifter import ObjectState3D
+from tests.factories import make_object
 
 
 def _obj(
@@ -17,22 +18,12 @@ def _obj(
     center: tuple[float, float, float],
     tracking_status: str = "tracked",
 ) -> ObjectState3D:
-    return ObjectState3D(
+    # Defaults match make_object's (detector 0.85 / mask 0.8 / depth 0.7 / overall 0.8).
+    return make_object(
         object_id=object_id,
         class_label=label,
-        bbox_xyxy=(100, 100, 200, 200),
-        mask_path=None,
-        center_2d=(150, 150),
-        coordinate_frame="world",
         center_3d_world=center,
-        extent_3d=(0.1, 0.1, 0.1),
-        median_depth=2.0,
-        depth_uncertainty=0.1,
-        confidence=ObjectConfidence(
-            detector=0.85, mask_quality=0.8, depth_quality=0.7, tracking=1.0, overall=0.8
-        ),
-        last_seen_frame=0,
-        tracking_status=tracking_status,  # type: ignore[arg-type]
+        tracking_status=tracking_status,
     )
 
 

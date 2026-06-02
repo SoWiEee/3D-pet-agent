@@ -12,7 +12,8 @@ import pytest
 from src.planning import GridConfig, Planner, PlannerConfig
 from src.planning.schema import NavigationConstraint, NavigationGoal
 from src.spatial import SemanticMap
-from src.spatial.object_lifter import ObjectConfidence, ObjectState3D
+from src.spatial.object_lifter import ObjectState3D
+from tests.factories import make_object
 
 
 def _obj(
@@ -23,22 +24,12 @@ def _obj(
     label: str = "cup",
     tracking_status: str = "tracked",
 ) -> ObjectState3D:
-    return ObjectState3D(
+    return make_object(
         object_id=object_id,
         class_label=label,
-        bbox_xyxy=(100, 100, 200, 200),
-        mask_path=None,
-        center_2d=(150, 150),
-        coordinate_frame="world",
         center_3d_world=center,
         extent_3d=extent,
-        median_depth=2.0,
-        depth_uncertainty=0.1,
-        confidence=ObjectConfidence(
-            detector=0.8, mask_quality=0.7, depth_quality=0.7, tracking=1.0, overall=0.8
-        ),
-        last_seen_frame=0,
-        tracking_status=tracking_status,  # type: ignore[arg-type]
+        tracking_status=tracking_status,
     )
 
 

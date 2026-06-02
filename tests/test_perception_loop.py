@@ -14,24 +14,26 @@ import pytest
 from src.config import AppConfig
 from src.runtime.perception_loop import PerceptionLoop
 from src.spatial import SceneGraphBuilder, SemanticMap
-from src.spatial.object_lifter import ObjectConfidence, ObjectState3D
+from src.spatial.object_lifter import ObjectState3D
 from src.tracking import Tracker
+from tests.factories import make_object
 
 
 def _obj() -> ObjectState3D:
-    return ObjectState3D(
+    return make_object(
         object_id="cup_001",
         class_label="cup",
-        bbox_xyxy=(0.0, 0.0, 10.0, 10.0),
-        center_2d=(5.0, 5.0),
         center_3d_world=(0.5, 0.0, 0.6),
         extent_3d=(0.08, 0.12, 0.08),
+        bbox_xyxy=(0.0, 0.0, 10.0, 10.0),
+        center_2d=(5.0, 5.0),
         median_depth=1.0,
         depth_uncertainty=0.05,
-        confidence=ObjectConfidence(overall=0.85),
-        tracking_status="tracked",
         last_seen_frame=1,
-        source_backend="mainline_grounding_sam",
+        detector=0.0,
+        mask_quality=0.0,
+        depth_quality=0.0,
+        overall=0.85,
     )
 
 

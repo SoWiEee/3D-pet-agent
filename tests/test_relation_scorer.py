@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from src.spatial import RelationConfig, RelationScorer
-from src.spatial.object_lifter import ObjectConfidence, ObjectState3D
+from src.spatial.object_lifter import ObjectState3D
+from tests.factories import make_object
 
 
 def _obj(
@@ -15,21 +16,13 @@ def _obj(
     bbox: tuple[float, float, float, float] = (100, 100, 200, 200),
     median_depth: float = 2.0,
 ) -> ObjectState3D:
-    return ObjectState3D(
+    return make_object(
         object_id=object_id,
         class_label=label,
-        bbox_xyxy=bbox,
-        mask_path=None,
-        center_2d=((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2),
-        coordinate_frame="world",
         center_3d_world=center,
         extent_3d=extent,
+        bbox_xyxy=bbox,
         median_depth=median_depth,
-        depth_uncertainty=0.1,
-        confidence=ObjectConfidence(
-            detector=0.8, mask_quality=0.7, depth_quality=0.7, tracking=1.0, overall=0.75
-        ),
-        last_seen_frame=0,
     )
 
 

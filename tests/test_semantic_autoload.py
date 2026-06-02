@@ -4,17 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from src.runtime import websocket_server as srv
 from src.runtime.websocket_server import _try_autoload_semantic_map
 from src.spatial import SemanticMap
-from src.spatial.object_lifter import ObjectConfidence, ObjectState3D
+from src.spatial.object_lifter import ObjectState3D
+from tests.factories import make_object
 
 
 def _make_obj(object_id: str, class_label: str = "cup") -> ObjectState3D:
-    return ObjectState3D(
+    return make_object(
         object_id=object_id,
         class_label=class_label,
         bbox_xyxy=(0.0, 0.0, 10.0, 10.0),
@@ -23,10 +23,11 @@ def _make_obj(object_id: str, class_label: str = "cup") -> ObjectState3D:
         extent_3d=(0.08, 0.12, 0.08),
         median_depth=1.0,
         depth_uncertainty=0.05,
-        confidence=ObjectConfidence(overall=0.85),
-        tracking_status="tracked",
         last_seen_frame=1,
-        source_backend="mainline_grounding_sam",
+        detector=0.0,
+        mask_quality=0.0,
+        depth_quality=0.0,
+        overall=0.85,
     )
 
 
@@ -88,13 +89,7 @@ def test_autoload_silent_on_corrupt_snapshot(tmp_path: Path) -> None:
 
 
 # ── /semantic/save endpoint ──────────────────────────────────────────────
-
-
-@pytest.fixture
-def client() -> TestClient:
-    srv.semantic_map.reset()
-    srv.tracker.reset()
-    return TestClient(srv.app)
+# (the `client` fixture comes from tests/conftest.py)
 
 
 def test_save_endpoint_writes_snapshot_to_default_path(

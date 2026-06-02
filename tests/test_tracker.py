@@ -6,6 +6,7 @@ import random
 
 from src.spatial.object_lifter import ObjectConfidence, ObjectState3D
 from src.tracking import Tracker
+from tests.factories import make_object
 
 
 def _make_obs(
@@ -18,21 +19,16 @@ def _make_obs(
     detector: float = 0.8,
     overall: float = 0.75,
 ) -> ObjectState3D:
-    return ObjectState3D(
+    return make_object(
         object_id=object_id,
         class_label=label,
         bbox_xyxy=bbox,
-        mask_path=None,
-        center_2d=((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2),
-        coordinate_frame="world",
         center_3d_world=center_3d,
-        extent_3d=(0.1, 0.1, 0.1),
-        median_depth=2.0,
-        depth_uncertainty=0.1,
-        confidence=ObjectConfidence(
-            detector=detector, mask_quality=0.7, depth_quality=0.7, tracking=1.0, overall=overall
-        ),
         last_seen_frame=frame_id,
+        detector=detector,
+        mask_quality=0.7,
+        depth_quality=0.7,
+        overall=overall,
     )
 
 

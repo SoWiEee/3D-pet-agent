@@ -9,8 +9,9 @@ from src.exploration.exploration_planner import (
     ExplorationPlanner,
     ExplorationPlannerConfig,
 )
-from src.spatial.object_lifter import ObjectConfidence, ObjectState3D
+from src.spatial.object_lifter import ObjectState3D
 from src.spatial.semantic_map import SemanticMap
+from tests.factories import make_object
 
 
 def _grid() -> CoverageGrid:
@@ -27,19 +28,20 @@ def _obj(
     status: str = "tracked",
     confidence: float = 0.9,
 ) -> ObjectState3D:
-    return ObjectState3D(
+    return make_object(
         object_id=object_id,
         class_label=label,
+        center_3d_world=pos,
         bbox_xyxy=(0.0, 0.0, 10.0, 10.0),
         center_2d=(5.0, 5.0),
-        center_3d_world=pos,
-        extent_3d=(0.1, 0.1, 0.1),
         median_depth=1.0,
         depth_uncertainty=0.05,
-        confidence=ObjectConfidence(overall=confidence),
-        tracking_status=status,
         last_seen_frame=1,
-        source_backend="mainline_grounding_sam",
+        tracking_status=status,
+        detector=0.0,
+        mask_quality=0.0,
+        depth_quality=0.0,
+        overall=confidence,
     )
 
 

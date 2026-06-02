@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.spatial import SemanticMap
-from src.spatial.object_lifter import ObjectConfidence, ObjectState3D
+from src.spatial.object_lifter import ObjectState3D
+from tests.factories import make_object
 
 
 def _obs(
@@ -16,25 +17,15 @@ def _obs(
     overall: float = 0.7,
     frame_id: int = 0,
 ) -> ObjectState3D:
-    return ObjectState3D(
+    return make_object(
         object_id=object_id,
         class_label=label,
-        bbox_xyxy=(100, 100, 200, 200),
-        mask_path=None,
-        center_2d=(150, 150),
-        coordinate_frame="world",
         center_3d_world=center,
-        extent_3d=(0.1, 0.1, 0.1),
-        median_depth=2.0,
-        depth_uncertainty=0.1,
-        confidence=ObjectConfidence(
-            detector=overall,
-            mask_quality=overall,
-            depth_quality=overall,
-            tracking=1.0,
-            overall=overall,
-        ),
         last_seen_frame=frame_id,
+        detector=overall,
+        mask_quality=overall,
+        depth_quality=overall,
+        overall=overall,
     )
 
 
