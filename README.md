@@ -8,40 +8,24 @@
 > - Phase 10 evaluation 結果 → [`docs/eval.md`](docs/eval.md)
 > - 完整 v2 規格 → [`docs/spec.md`](docs/spec.md)
 
-本 README 只保留**使用者操作指令**。
-
 ---
 
-## 目錄
+## 🚀 Getting Started
 
-- [安裝](#安裝)
-- [Quick Start — CLI](#quick-start--cli)
-- [End-to-End demo（後端 + 前端）](#end-to-end-demo後端--前端)
-- [HTTP / WS 端點速查表](#http--ws-端點速查表)
-- [設定檔](#設定檔)
-- [開發工作流](#開發工作流)
-- [已知限制](#已知限制)
-- [License](#license)
-
----
-
-## 安裝
-
-驗證環境：Linux + RTX 4070 + Python 3.12 + Node 18。
+> Linux + RTX 4070 + Python 3.12 + Node 18。
 
 ```bash
 git clone https://github.com/SoWiEee/3D-pet-agent.git
 cd 3D-pet-agent
 
-# Python — 用 uv 管理
 uv venv --python 3.12
 source .venv/bin/activate
 uv pip install -e ".[dev]"
 
-# 前端
+# frontend
 cd frontend && npm install && cd ..
 
-# 驗證
+# verify
 .venv/bin/python -c "import torch; print('cuda:', torch.cuda.is_available())"
 .venv/bin/pytest -q   # 預期 242 passed
 ```
@@ -50,7 +34,7 @@ cd frontend && npm install && cd ..
 
 ---
 
-## Quick Start — CLI
+## 🚀 Quick Start (CLI)
 
 所有 CLI 模式由 `main.py --mode <name>` 派發。各模式的輸出檔意義與內部運作見 [`docs/architecture.md`](docs/architecture.md)。
 
@@ -125,30 +109,6 @@ cd frontend && npm run dev
   - `move 0.5 0 1.2`、`path 0 0 0 ; 0.3 0 0.5 ; 0.6 0 1.0`、`look -0.3 0.4 1.0`
   - `anim sit` / `emote curious` / `say hello`
 
-### 透過 curl
-
-```bash
-# 餵 perception 結果（Phase 3/4 lifted JSON）
-curl -X POST http://127.0.0.1:8000/perception/lifted \
-  -H 'Content-Type: application/json' -d @runs/lifted_desk.json
-
-# 自然語言指令
-curl -X POST http://127.0.0.1:8000/command \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"go to the cup"}'
-
-# Phase 9 探索
-curl -X POST http://127.0.0.1:8000/exploration/observe \
-  -d '{"camera_xz":[0,0],"heading_rad":0,"fov_rad":1.5708,"range_m":1.0}'
-curl -X POST http://127.0.0.1:8000/exploration/step -d '{}'
-
-# Debug 端點
-curl http://127.0.0.1:8000/scene/graph | jq
-curl http://127.0.0.1:8000/planning/occupancy | jq '.blocked_cells'
-curl http://127.0.0.1:8000/control/last_trace | jq
-curl http://127.0.0.1:8000/exploration/coverage | jq '.unobserved_ratio'
-```
-
 ---
 
 ## HTTP / WS 端點速查表
@@ -213,14 +173,3 @@ cd frontend && npx vue-tsc --noEmit      # 前端型別檢查
 - OpenScene 風格 3D 語意查詢列為可選後端，不在第一輪 live demo 路徑。
 - **GroundingDINO 以 fp32 執行**：fp16 在 deformable attention 的 `grid_sample` 觸發 dtype 不一致；RTX 4070 上 fp32 約 0.5–1 秒/張，足夠撐住 spec 的 2 Hz。
 
----
-
-## License
-
-License 細節尚未敲定。
-
----
-
-## 致謝
-
-本專案站在開源電腦視覺與 3D 圖學社群肩膀上：GroundingDINO、Segment Anything、SAM 2、Depth Anything V2、OpenScene、PyTorch、OpenCV、Open3D、Vue、Vite、Three.js。
