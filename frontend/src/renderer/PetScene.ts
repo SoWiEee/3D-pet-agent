@@ -31,6 +31,21 @@ export class PetScene {
   private raf = 0;
   private resizeObserver?: ResizeObserver;
 
+  // Custom drag controls — left button pans, right button orbits. We track
+  // the camera as an offset from `cameraTarget` so panning and orbiting
+  // share the same anchor: pan moves the target along the camera's right /
+  // up plane; orbit rotates around it via spherical coordinates.
+  private cameraTarget = new THREE.Vector3(0, 0.4, 0);
+  private cameraSpherical = new THREE.Spherical();
+  private activeDrag: "pan" | "orbit" | null = null;
+  private lastPointer = { x: 0, y: 0 };
+  private static readonly PAN_SPEED = 0.0025;     // metres per pixel (scaled by distance)
+  private static readonly ORBIT_SPEED = 0.005;    // radians per pixel
+  private static readonly MIN_PHI = 0.1;          // keep above horizon to avoid gimbal flip
+  private static readonly MAX_PHI = Math.PI / 2 - 0.05;
+  private static readonly MIN_RADIUS = 1.2;
+  private static readonly MAX_RADIUS = 20.0;
+
   constructor(private opts: PetSceneOptions) {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x07090a);
@@ -47,8 +62,14 @@ export class PetScene {
     const { clientWidth: w, clientHeight: h } = opts.el;
     this.camera = new THREE.PerspectiveCamera(38, w / h, 0.1, 100);
     this.camera.position.set(2.7, 2.1, 3.4);
-    this.camera.lookAt(0, 0.4, 0);
+    this.camera.lookAt(this.cameraTarget);
+    // Seed the spherical state from the initial pose so the first orbit drag
+    // doesn't snap the camera.
+    this.cameraSpherical.setFromVector3(
+      this.camera.position.clone().sub(this.cameraTarget),
+    );
 
+    this.installDragControls(this.renderer.domElement);
     this.buildEnvironment();
     this.cat = new Cat();
     this.scene.add(this.cat.group);
@@ -249,6 +270,105 @@ export class PetScene {
     this.relationEdges.update(edges);
   }
 
+  // ── camera drag controls ──────────────────────────────────────────────
+  /** Wire pointer / contextmenu / wheel listeners on the canvas. Left button
+   *  pans the look-at target; right button orbits around it. Wheel zooms
+   *  along the current camera-to-target axis. */
+  private installDragControls(el: HTMLElement) {
+    el.addEventListener("pointerdown", this.onPointerDown);
+    el.addEventListener("pointermove", this.onPointerMove);
+    el.addEventListener("pointerup", this.onPointerEnd);
+    el.addEventListener("pointercancel", this.onPointerEnd);
+    el.addEventListener("pointerleave", this.onPointerEnd);
+    el.addEventListener("contextmenu", this.onContextMenu);
+    el.addEventListener("wheel", this.onWheel, { passive: false });
+  }
+
+  private uninstallDragControls(el: HTMLElement) {
+    el.removeEventListener("pointerdown", this.onPointerDown);
+    el.removeEventListener("pointermove", this.onPointerMove);
+    el.removeEventListener("pointerup", this.onPointerEnd);
+    el.removeEventListener("pointercancel", this.onPointerEnd);
+    el.removeEventListener("pointerleave", this.onPointerEnd);
+    el.removeEventListener("contextmenu", this.onContextMenu);
+    el.removeEventListener("wheel", this.onWheel);
+  }
+
+  private onPointerDown = (e: PointerEvent) => {
+    if (e.button === 0) this.activeDrag = "pan";
+    else if (e.button === 2) this.activeDrag = "orbit";
+    else return;
+    this.lastPointer = { x: e.clientX, y: e.clientY };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  };
+
+  private onPointerMove = (e: PointerEvent) => {
+    if (!this.activeDrag) return;
+    const dx = e.clientX - this.lastPointer.x;
+    const dy = e.clientY - this.lastPointer.y;
+    this.lastPointer = { x: e.clientX, y: e.clientY };
+    if (this.activeDrag === "pan") this.pan(dx, dy);
+    else this.orbit(dx, dy);
+  };
+
+  private onPointerEnd = (e: PointerEvent) => {
+    if (!this.activeDrag) return;
+    this.activeDrag = null;
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore — pointer may already have been released
+    }
+  };
+
+  private onContextMenu = (e: MouseEvent) => {
+    // Swallow the native menu so right-click can drive orbiting.
+    e.preventDefault();
+  };
+
+  private onWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    // Zoom by adjusting spherical radius — keeps the look-at point fixed.
+    const factor = Math.exp(e.deltaY * 0.001);
+    this.cameraSpherical.radius = THREE.MathUtils.clamp(
+      this.cameraSpherical.radius * factor,
+      PetScene.MIN_RADIUS,
+      PetScene.MAX_RADIUS,
+    );
+    this.applyCamera();
+  };
+
+  private pan(dx: number, dy: number) {
+    // Translate the camera target along the camera-relative right / up
+    // basis. Pan speed scales with current zoom so the per-pixel motion
+    // feels consistent regardless of distance.
+    const distance = this.cameraSpherical.radius;
+    const scale = PetScene.PAN_SPEED * distance;
+    const right = new THREE.Vector3();
+    const up = new THREE.Vector3();
+    this.camera.matrixWorld.extractBasis(right, up, new THREE.Vector3());
+    const offset = right.multiplyScalar(-dx * scale).add(up.multiplyScalar(dy * scale));
+    this.cameraTarget.add(offset);
+    this.applyCamera();
+  }
+
+  private orbit(dx: number, dy: number) {
+    this.cameraSpherical.theta -= dx * PetScene.ORBIT_SPEED;
+    this.cameraSpherical.phi = THREE.MathUtils.clamp(
+      this.cameraSpherical.phi - dy * PetScene.ORBIT_SPEED,
+      PetScene.MIN_PHI,
+      PetScene.MAX_PHI,
+    );
+    this.applyCamera();
+  }
+
+  private applyCamera() {
+    const offset = new THREE.Vector3().setFromSpherical(this.cameraSpherical);
+    this.camera.position.copy(this.cameraTarget).add(offset);
+    this.camera.lookAt(this.cameraTarget);
+  }
+
   // ── loop ──────────────────────────────────────────────────────────────
   private handleResize = () => {
     const { clientWidth: w, clientHeight: h } = this.opts.el;
@@ -270,6 +390,7 @@ export class PetScene {
   dispose() {
     cancelAnimationFrame(this.raf);
     this.resizeObserver?.disconnect();
+    this.uninstallDragControls(this.renderer.domElement);
     this.renderer.dispose();
     this.opts.el.removeChild(this.renderer.domElement);
   }
