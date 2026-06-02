@@ -612,11 +612,19 @@ def _execute_exploration_goal(intent: Any, ex_goal: ExplorationGoal) -> dict[str
     if discovered:
         runtime.ask("I found: " + ", ".join(discovered[:5]) + ("…" if len(discovered) > 5 else ""))
 
+    goal_payload = {
+        "kind": ex_goal.kind,
+        "target_position_world": list(ex_goal.target_position_world),
+        "score": round(ex_goal.score, 4),
+        "related_object_id": ex_goal.related_object_id,
+        "explanation": ex_goal.explanation,
+    }
     runtime.move_follow_path(
         trace.path_world,
         speed=_ctrl_cfg.pure_pursuit.base_speed,
         look_at_object_id=ex_goal.related_object_id,
         controller_trace=_last_trace_summary,
+        exploration_goal=goal_payload,
     )
     return {
         "parsed": True,

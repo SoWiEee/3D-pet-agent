@@ -58,6 +58,31 @@ export interface SceneGraphPayload {
   relations: RelationEdge[];
 }
 
+export type ExplorationGoalKind =
+  | "inspect_unknown"
+  | "search_object"
+  | "verify_stale"
+  | "look_behind";
+
+export interface ExplorationGoalPayload {
+  kind: ExplorationGoalKind | string;
+  target_position_world: Waypoint;
+  score: number;
+  related_object_id?: string | null;
+  explanation?: string;
+}
+
+/** Shape of `GET /exploration/coverage` (CoverageGrid.to_dict). */
+export interface CoveragePayload {
+  resolution: number;
+  origin_x: number;
+  origin_z: number;
+  width: number;
+  height: number;
+  unobserved_ratio: number;
+  cells: number[][]; // [height][width] observation counts
+}
+
 export interface PetAction {
   action:
     | "move_to"
@@ -78,6 +103,7 @@ export interface PetAction {
   state?: PetState | null;
   world_objects?: WorldObjectMarker[] | null;
   scene_graph?: SceneGraphPayload | null;
+  exploration_goal?: ExplorationGoalPayload | null;
   timestamp?: number;
 }
 

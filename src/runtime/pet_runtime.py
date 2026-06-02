@@ -73,6 +73,10 @@ class PetAction(BaseModel):
     # Phase 5: scene graph snapshot (edges over world_objects) — piggybacks on
     # the world_update broadcast so renderers can draw both atomically.
     scene_graph: dict[str, Any] | None = None
+    # Phase 9: exploration goal the controller is driving toward — kind,
+    # target_position_world, score, explanation. Rides along the
+    # move_follow_path broadcast so the renderer can mark the viewpoint.
+    exploration_goal: dict[str, Any] | None = None
     timestamp: float = Field(default_factory=time.time)
 
 
@@ -134,6 +138,7 @@ class PetRuntime:
         speed: float | None = None,
         look_at_object_id: str | None = None,
         controller_trace: dict[str, Any] | None = None,
+        exploration_goal: dict[str, Any] | None = None,
     ) -> PetAction:
         """Walk along a planned path (spec §3.7 ``move_follow_path``).
 
@@ -159,6 +164,7 @@ class PetRuntime:
             speed=self.state.speed,
             state=self.state.model_copy(),
             controller_trace=controller_trace,
+            exploration_goal=exploration_goal,
         )
         self._broadcast(action)
         return action

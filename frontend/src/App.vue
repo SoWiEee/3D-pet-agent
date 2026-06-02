@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vu
 import { PetScene } from "./renderer/PetScene";
 import {
   usePetSocket,
+  type CoveragePayload,
   type PetAction,
   type SceneGraphPayload,
   type WorldObjectMarker,
@@ -39,6 +40,18 @@ watch(lastAction, (a: PetAction | null) => {
     scene.moveTo(x, y, z, a.speed ?? 0.8);
   } else if (a.action === "move_follow_path" && a.path) {
     scene.followPath(a.path, a.speed ?? 0.35);
+    if (a.exploration_goal) {
+      const g = a.exploration_goal;
+      scene.setExplorationGoal({
+        position: g.target_position_world,
+        kind: g.kind,
+        score: g.score,
+      });
+      // An explore step likely changed coverage — refresh if the overlay is on.
+      if (coverageOn.value) void refreshCoverage();
+    } else {
+      scene.clearExplorationGoal();
+    }
   } else if (a.action === "look_at" && a.target_position_3d) {
     const [x, y, z] = a.target_position_3d;
     scene.lookAt(x, y, z);
@@ -123,6 +136,26 @@ function toggleInsights() {
 function toggleEvents() {
   eventsOpen.value = !eventsOpen.value;
 }
+
+// CoverageGrid debug overlay — pulled on demand from /exploration/coverage
+// (it isn't pushed over the WS stream, so we fetch when the user toggles it on
+// and after each exploration step).
+const coverageOn = ref(false);
+async function refreshCoverage() {
+  try {
+    const r = await fetch("/exploration/coverage");
+    if (!r.ok) return;
+    const p = (await r.json()) as CoveragePayload;
+    scene?.setCoverage(coverageOn.value ? p : null);
+  } catch (e) {
+    console.warn("coverage fetch failed", e);
+  }
+}
+function toggleCoverage() {
+  coverageOn.value = !coverageOn.value;
+  if (coverageOn.value) void refreshCoverage();
+  else scene?.setCoverage(null);
+}
 </script>
 
 <template>
@@ -151,6 +184,16 @@ function toggleEvents() {
           <span class="vp-label__id">GRID</span>
           <span class="vp-label__name">12 m · 0.5 m / div</span>
         </div>
+
+        <!-- Coverage heatmap toggle (exploration debug overlay). -->
+        <button
+          class="vp-toggle"
+          :class="{ 'vp-toggle--on': coverageOn }"
+          type="button"
+          @click="toggleCoverage"
+        >
+          ● 覆蓋圖
+        </button>
 
         <!-- Compact bottom-left HUD: x / y / z · v · emoji. -->
         <div class="vp-hud">
@@ -253,5 +296,28 @@ function toggleEvents() {
   line-height: 1;
   margin-left: 4px;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+}
+
+/* Coverage overlay toggle — sits under the CAM label, mirrors label chrome. */
+.vp-toggle {
+  position: absolute;
+  top: 52px;
+  right: 60px;
+  z-index: 7;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--c-bone-dim);
+  background: rgba(7, 9, 10, 0.55);
+  padding: 4px 8px;
+  border: 1px solid var(--c-line);
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+.vp-toggle:hover { color: var(--c-bone); border-color: var(--c-phosphor); }
+.vp-toggle--on {
+  color: var(--c-phosphor);
+  border-color: var(--c-phosphor);
+  background: rgba(116, 247, 208, 0.08);
 }
 </style>

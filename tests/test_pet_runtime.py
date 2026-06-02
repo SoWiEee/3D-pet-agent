@@ -74,6 +74,26 @@ def test_move_follow_path_snaps_state_to_end_and_broadcasts():
     assert delivered.path and len(delivered.path) == 3
 
 
+def test_move_follow_path_carries_exploration_goal():
+    rt = PetRuntime()
+    q = rt.subscribe()
+    goal = {
+        "kind": "inspect_unknown",
+        "target_position_world": [1.0, 0.0, 0.5],
+        "score": 0.82,
+        "related_object_id": None,
+        "explanation": "Largest unobserved region.",
+    }
+    action = rt.move_follow_path([(0.0, 0.0, 0.0), (1.0, 0.0, 0.5)], exploration_goal=goal)
+    assert action.exploration_goal == goal
+    delivered = q.get_nowait()
+    assert delivered.exploration_goal is not None
+    assert delivered.exploration_goal["kind"] == "inspect_unknown"
+    # Plain moves leave it null.
+    plain = rt.move_follow_path([(0.0, 0.0, 0.0), (0.2, 0.0, 0.2)])
+    assert plain.exploration_goal is None
+
+
 def test_move_follow_path_rejects_empty_path():
     rt = PetRuntime()
     with pytest.raises(ValueError):
