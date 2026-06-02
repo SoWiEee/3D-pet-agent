@@ -83,22 +83,44 @@ export interface PetAction {
 
 export type ConnState = "connecting" | "open" | "closed" | "error";
 
+// Exponential backoff with full jitter. The server replays the pet state and
+// the latest `world_update` on every fresh connection (see ws_pet), so a
+// reconnect alone restores the scene — the client never has to re-request it.
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_CAP_MS = 10000;
+
+export function reconnectDelay(attempt: number, rng: () => number = Math.random): number {
+  const exp = Math.min(RECONNECT_CAP_MS, RECONNECT_BASE_MS * 2 ** Math.max(0, attempt - 1));
+  // Full jitter: random in [exp/2, exp] keeps a floor while spreading retries.
+  return Math.round(exp / 2 + rng() * (exp / 2));
+}
+
 export function usePetSocket(url: string) {
   const status = ref<ConnState>("closed");
   const lastAction = shallowRef<PetAction | null>(null);
   const petState = shallowRef<PetState | null>(null);
   const history = ref<PetAction[]>([]);
+  const reconnectAttempts = ref(0);
   let ws: WebSocket | null = null;
-  let retry = 0;
   let timer: number | undefined;
+  let disposed = false;
+
+  function scheduleReconnect() {
+    if (disposed) return;
+    reconnectAttempts.value += 1;
+    const delay = reconnectDelay(reconnectAttempts.value);
+    if (timer) window.clearTimeout(timer);
+    timer = window.setTimeout(connect, delay);
+  }
 
   function connect() {
+    if (disposed) return;
     status.value = "connecting";
     ws = new WebSocket(url);
 
     ws.onopen = () => {
       status.value = "open";
-      retry = 0;
+      reconnectAttempts.value = 0;
     };
     ws.onmessage = (ev) => {
       try {
@@ -112,13 +134,13 @@ export function usePetSocket(url: string) {
       }
     };
     ws.onerror = () => {
+      // onerror is always followed by onclose; let onclose own the retry so we
+      // don't schedule two reconnects for one drop.
       status.value = "error";
     };
     ws.onclose = () => {
       status.value = "closed";
-      retry += 1;
-      const delay = Math.min(8000, 600 * retry);
-      timer = window.setTimeout(connect, delay);
+      scheduleReconnect();
     };
   }
 
@@ -131,9 +153,16 @@ export function usePetSocket(url: string) {
   connect();
 
   onBeforeUnmount(() => {
+    disposed = true;
     if (timer) window.clearTimeout(timer);
-    ws?.close();
+    if (ws) {
+      // Drop handlers first so the impending close doesn't schedule a reconnect
+      // after the component is gone.
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.close();
+    }
   });
 
-  return { status, lastAction, petState, history, send };
+  return { status, lastAction, petState, history, reconnectAttempts, send };
 }
