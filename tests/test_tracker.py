@@ -15,6 +15,8 @@ def _make_obs(
     bbox: tuple[float, float, float, float],
     center_3d: tuple[float, float, float],
     frame_id: int,
+    detector: float = 0.8,
+    overall: float = 0.75,
 ) -> ObjectState3D:
     return ObjectState3D(
         object_id=object_id,
@@ -28,7 +30,7 @@ def _make_obs(
         median_depth=2.0,
         depth_uncertainty=0.1,
         confidence=ObjectConfidence(
-            detector=0.8, mask_quality=0.7, depth_quality=0.7, tracking=1.0, overall=0.75
+            detector=detector, mask_quality=0.7, depth_quality=0.7, tracking=1.0, overall=overall
         ),
         last_seen_frame=frame_id,
     )
@@ -163,6 +165,74 @@ def test_greedy_avoids_double_assign() -> None:
     [tracked_a, tracked_b] = t.update([a1, b1], frame_id=1)
     assert {tracked_a.object_id, tracked_b.object_id} == {"track_001", "track_002"}
     assert tracked_a.object_id != tracked_b.object_id
+
+
+def test_low_confidence_detection_does_not_spawn_track() -> None:
+    """ByteTrack: a faint box with no track to recover is dropped, not minted."""
+    t = Tracker(high_confidence=0.5)
+    faint = _make_obs(
+        object_id="x",
+        label="cup",
+        bbox=(100, 100, 200, 200),
+        center_3d=(0.0, 0.0, -2.0),
+        frame_id=0,
+        detector=0.2,  # below high_confidence
+        overall=0.2,
+    )
+    out = t.update([faint], frame_id=0)
+    assert out == []
+    assert t.active_tracks == {}
+
+
+def test_low_confidence_detection_recovers_existing_track() -> None:
+    """ByteTrack stage 2: a faint box continues an established high-conf track."""
+    t = Tracker(high_confidence=0.5)
+    strong = _make_obs(
+        object_id="x",
+        label="cup",
+        bbox=(100, 100, 200, 200),
+        center_3d=(0.0, 0.0, -2.0),
+        frame_id=0,
+        detector=0.9,
+    )
+    [first] = t.update([strong], frame_id=0)
+    assert first.object_id == "track_001"
+
+    faint = strong.model_copy(
+        update={
+            "bbox_xyxy": (104, 104, 204, 204),
+            "last_seen_frame": 1,
+            "confidence": ObjectConfidence(detector=0.2, overall=0.2),
+        }
+    )
+    [recovered] = t.update([faint], frame_id=1)
+    assert recovered.object_id == "track_001"  # same id, recovered by stage 2
+
+
+def test_velocity_prediction_holds_id_under_fast_bbox_motion() -> None:
+    """A consistently moving object keeps one id across many frames. Per-frame
+    bbox displacement (60px on a 100px box → raw IoU 0.25) is well below
+    ``min_iou``; once the velocity model warms up, the predicted bbox overlaps
+    the next detection and association stays confident instead of flipping ids."""
+    t = Tracker(min_iou=0.5, max_center_distance=0.06, distance_weight=0.4)
+    center = [0.0, 0.0, -2.0]
+    step = 0.05  # within the distance gate so the cold-start frame matches
+    bbox = [100.0, 100.0, 200.0, 200.0]
+    seen: set[str] = set()
+    for fi in range(8):
+        obs = _make_obs(
+            object_id="raw",
+            label="cup",
+            bbox=tuple(bbox),  # type: ignore[arg-type]
+            center_3d=tuple(center),  # type: ignore[arg-type]
+            frame_id=fi,
+        )
+        [out] = t.update([obs], frame_id=fi)
+        seen.add(out.object_id)
+        center[0] += step
+        bbox[0] += 60
+        bbox[2] += 60
+    assert seen == {"track_001"}, f"velocity model failed to hold id: {seen}"
 
 
 def test_reset_clears_state() -> None:
