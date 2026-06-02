@@ -270,11 +270,29 @@ GitHub Actions 環境 push 過。
 
 ## C. UX / 視覺化精進
 
+### ✅ A\* 路徑 / CoverageGrid / Exploration goal marker — 完成（commit `68fde2a`）
+
+三個 scene overlay，皆由既有 pipeline 資料驅動（`frontend/src/renderer/PetScene.ts`）：
+
+- **A\* 路徑視覺化**：直接畫 controller 的 dense `move_follow_path` 軌跡，做成
+  additive-blend 發光 tube（`LineBasicMaterial` 在 WebGL 被鎖 1px、太淡，故改用
+  `TubeGeometry`）＋ 起點/終點 puck。`followPath` 時顯示、抵達時淡出。比 rasterize
+  occupancy grid 更貼近實際走的路徑。
+- **CoverageGrid 視覺化**：`GET /exploration/coverage` 用 `CanvasTexture` 畫成地板
+  熱圖（未觀察＝暖色霧、已觀察＝依計數的磷光漸層），單一貼圖 plane。視窗右上「覆蓋圖」
+  按鈕切換；coverage 不走 WS 串流，所以是 on-demand fetch（並加進 vite dev proxy）。
+- **Exploration goal marker**：依 goal kind 著色的 beacon（ring＋beam＋kind/score
+  標籤）。Goal 透過新的 `PetAction.exploration_goal` 欄位搭 `move_follow_path` 廣播
+  （`controller_trace` 因 Pydantic `extra="ignore"` 被默默丟掉，故新欄位有正式宣告），
+  穿過 `runtime.move_follow_path`。已用 live backend ＋ headless 瀏覽器端到端驗證。
+
+### C 系列（原始描述）
+
 | 項目 | 現狀 | 修補方向 |
 |---|---|---|
-| **A\* 路徑視覺化** | `/planning/occupancy` 已回傳 grid，前端無 overlay | 在地板加一層 instanced mesh，blocked cells 顯紅色，path waypoints 連線顯磷光綠 |
-| **CoverageGrid 視覺化** | Phase 9 `/exploration/coverage` 有資料，前端無熱圖 | 同上做地板 overlay，未觀察 cell 顯灰、已觀察按計數做漸層 |
-| **Exploration goal marker** | 導航成功有 target marker；探索 goal 沒有視覺目標 | 重用 `TargetMarker` class，加 `kind: "exploration"` 樣式變體 |
+| ✅ **A\* 路徑視覺化** | ~~`/planning/occupancy` 已回傳 grid，前端無 overlay~~ → 完成（發光 tube，畫 controller 實際軌跡） | 在地板加一層 instanced mesh，blocked cells 顯紅色，path waypoints 連線顯磷光綠 |
+| ✅ **CoverageGrid 視覺化** | ~~Phase 9 `/exploration/coverage` 有資料，前端無熱圖~~ → 完成（CanvasTexture 熱圖＋切換鈕） | 同上做地板 overlay，未觀察 cell 顯灰、已觀察按計數做漸層 |
+| ✅ **Exploration goal marker** | ~~導航成功有 target marker；探索 goal 沒有視覺目標~~ → 完成（kind 著色 beacon，goal 走 WS 廣播） | 重用 `TargetMarker` class，加 `kind: "exploration"` 樣式變體 |
 | **Eval replay UI** | 跑 dataset 只能看 markdown report | 加前端 "/eval" 路由，可逐 trial step through、播 controller_trace 動畫 |
 | **拖曳放物件** | 沒有 UI 編輯場景，只能 curl | 加「點地板放物件」+ class label 下拉，發 POST 到 `/perception/lifted` |
 | **Grounding explanation panel** | `goal.explanation` 只透過 speech bubble 短暫顯示 | 在 topbar 加「上一次推理」按鈕 → 彈窗顯示 parser intent + resolver score breakdown + planner status |
