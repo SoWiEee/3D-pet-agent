@@ -8,7 +8,7 @@
 import * as THREE from "three";
 import { Tween, Easing, Group as TweenGroup } from "@tweenjs/tween.js";
 import { Cat } from "./Cat";
-import type { CoveragePayload } from "../composables/useWebSocket";
+import type { CoveragePayload, OccupancyPayload } from "../composables/useWebSocket";
 
 /** Argument for {@link PetScene.setExplorationGoal}. */
 export interface ExplorationGoalView {
@@ -31,6 +31,7 @@ export class PetScene {
   relationEdges!: RelationEdgesLayer;
   plannedPath!: PlannedPathLayer;
   coverage!: CoverageLayer;
+  occupancy!: OccupancyLayer;
   explorationGoal!: ExplorationGoalMarker;
   private clock = new THREE.Clock();
   private tweens = new TweenGroup();
@@ -94,6 +95,8 @@ export class PetScene {
     // Coverage sits lowest (floor decal); planned path + goal beacon ride above.
     this.coverage = new CoverageLayer();
     this.scene.add(this.coverage.group);
+    this.occupancy = new OccupancyLayer();
+    this.scene.add(this.occupancy.group);
     this.plannedPath = new PlannedPathLayer();
     this.scene.add(this.plannedPath.group);
     this.explorationGoal = new ExplorationGoalMarker();
@@ -299,6 +302,12 @@ export class PetScene {
   /** Show / hide the CoverageGrid heatmap (Phase 9). Pass null to hide. */
   setCoverage(payload: CoveragePayload | null) {
     this.coverage.set(payload);
+  }
+
+  /** Show / hide the OccupancyGrid overlay (Phase 7). Used to explain *why* a
+   *  plan failed — blocked cells render red. Pass null to hide. */
+  setOccupancy(payload: OccupancyPayload | null) {
+    this.occupancy.set(payload);
   }
 
   /** Mark the exploration planner's chosen viewpoint with a colour-coded beacon. */
@@ -753,6 +762,78 @@ class CoverageLayer {
     this.mesh = new THREE.Mesh(this.geo, this.mat);
     this.mesh.rotation.x = -Math.PI / 2;
     this.mesh.position.set(p.origin_x + worldW / 2, 0.004, p.origin_z + worldH / 2);
+    this.group.add(this.mesh);
+    this.group.visible = true;
+  }
+
+  private dispose() {
+    if (this.mesh) this.group.remove(this.mesh);
+    this.geo?.dispose();
+    this.mat?.dispose();
+    this.tex?.dispose();
+    this.mesh = undefined;
+    this.geo = undefined;
+    this.mat = undefined;
+    this.tex = undefined;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Occupancy layer — the planner's OccupancyGrid rendered as a red floor decal
+// of blocked cells. Shown transiently when a plan fails so the user can see
+// *why* the path was rejected (obstacle inflation, blocked goal/start). Free
+// cells are fully transparent. Same CanvasTexture-plane trick as CoverageLayer.
+// ─────────────────────────────────────────────────────────────────────────────
+class OccupancyLayer {
+  group = new THREE.Group();
+  private mesh?: THREE.Mesh;
+  private tex?: THREE.CanvasTexture;
+  private mat?: THREE.MeshBasicMaterial;
+  private geo?: THREE.PlaneGeometry;
+
+  set(p: OccupancyPayload | null) {
+    this.dispose();
+    if (!p) {
+      this.group.visible = false;
+      return;
+    }
+    const { width: w, height: h } = p;
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d")!;
+    const img = ctx.createImageData(w, h);
+
+    for (let gz = 0; gz < h; gz++) {
+      const row = h - 1 - gz; // flipped: plane local +y → world -z
+      for (let gx = 0; gx < w; gx++) {
+        const blocked = p.data[gz * w + gx] > 0;
+        const i = (row * w + gx) * 4;
+        img.data[i] = 235;
+        img.data[i + 1] = 70;
+        img.data[i + 2] = 70;
+        img.data[i + 3] = blocked ? 150 : 0; // free cells fully transparent
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+
+    this.tex = new THREE.CanvasTexture(canvas);
+    this.tex.flipY = false;
+    this.tex.magFilter = THREE.NearestFilter;
+    this.tex.minFilter = THREE.LinearFilter;
+
+    const worldW = w * p.resolution;
+    const worldH = h * p.resolution;
+    this.geo = new THREE.PlaneGeometry(worldW, worldH);
+    this.mat = new THREE.MeshBasicMaterial({
+      map: this.tex,
+      transparent: true,
+      depthWrite: false,
+      opacity: 0.85,
+    });
+    this.mesh = new THREE.Mesh(this.geo, this.mat);
+    this.mesh.rotation.x = -Math.PI / 2;
+    this.mesh.position.set(p.origin[0] + worldW / 2, 0.006, p.origin[1] + worldH / 2);
     this.group.add(this.mesh);
     this.group.visible = true;
   }

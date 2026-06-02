@@ -47,6 +47,8 @@ class GroundingResult:
     status: Literal["success", "clarification", "no_match", "empty_map"]
     goal: NavigationGoal | None = None
     candidates: list[tuple[str, float]] | None = None  # for clarification + debugging
+    # Per-candidate component scores (top 3), for the grounding explanation panel.
+    candidate_breakdowns: list[dict[str, float | str]] | None = None
     explanation: str = ""
 
 
@@ -56,6 +58,37 @@ _W_ATTRIBUTE = 0.20
 _W_RELATION = 0.25
 _W_VISIBILITY = 0.10
 _W_FEASIBILITY = 0.10
+
+# Public view of the weights so callers (and the UI) can render the breakdown
+# without re-declaring the numbers and drifting out of sync.
+GROUNDING_WEIGHTS: dict[str, float] = {
+    "semantic": _W_SEMANTIC,
+    "attribute": _W_ATTRIBUTE,
+    "relation": _W_RELATION,
+    "visibility": _W_VISIBILITY,
+    "feasibility": _W_FEASIBILITY,
+}
+
+
+def _breakdown_view(
+    scored: list[tuple[ObjectState3D, float, dict[str, float]]],
+) -> list[dict[str, float | str]]:
+    """Top-candidate component scores, for the explanation panel."""
+    out: list[dict[str, float | str]] = []
+    for obj, total, bd in scored[:3]:
+        out.append(
+            {
+                "object_id": obj.object_id,
+                "class_label": obj.class_label,
+                "total": round(total, 4),
+                "semantic": round(bd["semantic"], 4),
+                "attribute": round(bd["attribute"], 4),
+                "relation": round(bd["relation"], 4),
+                "visibility": round(bd["visibility"], 4),
+                "feasibility": round(bd["feasibility"], 4),
+            }
+        )
+    return out
 
 
 class GroundingResolver:
@@ -131,10 +164,13 @@ class GroundingResolver:
             top_score,
         )
 
+        breakdowns = _breakdown_view(scored)
+
         if top_score < self.min_final_score:
             return GroundingResult(
                 status="no_match",
                 candidates=[(o.object_id, s) for o, s, _ in scored[:3]],
+                candidate_breakdowns=breakdowns,
                 explanation=(
                     f"No candidate scored above {self.min_final_score:.2f} "
                     f"(best: {top.object_id}={top_score:.2f})."
@@ -148,6 +184,7 @@ class GroundingResolver:
                 return GroundingResult(
                     status="clarification",
                     candidates=[(o.object_id, s) for o, s, _ in scored[:3]],
+                    candidate_breakdowns=breakdowns,
                     explanation=(
                         f"Ambiguous between top candidates: {contenders}. Which one did you mean?"
                     ),
@@ -175,7 +212,12 @@ class GroundingResolver:
             score=top_score,
             timestamp=time.time(),
         )
-        return GroundingResult(status="success", goal=goal, explanation=goal.explanation)
+        return GroundingResult(
+            status="success",
+            goal=goal,
+            candidate_breakdowns=breakdowns,
+            explanation=goal.explanation,
+        )
 
     # ── scoring ─────────────────────────────────────────────────────────────
     def _score(

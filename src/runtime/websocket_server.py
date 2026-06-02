@@ -43,7 +43,13 @@ from ..exploration import (
     ExplorationPlanner,
 )
 from ..language import parse_command
-from ..planning import GridConfig, GroundingResolver, Planner, PlannerConfig
+from ..planning import (
+    GROUNDING_WEIGHTS,
+    GridConfig,
+    GroundingResolver,
+    Planner,
+    PlannerConfig,
+)
 from ..spatial import SceneGraphBuilder, SemanticMap
 from ..spatial.object_lifter import ObjectState3D
 from ..tracking import Tracker
@@ -440,6 +446,20 @@ class CommandRequest(BaseModel):
     text: str
 
 
+def _reasoning_fields(result: Any) -> dict[str, Any]:
+    """Grounding-reasoning fields for the explanation panel: the human-readable
+    explanation, per-candidate score breakdown, the chosen goal's score, and the
+    scoring weights (so the UI renders bars without re-declaring them)."""
+    out: dict[str, Any] = {"weights": GROUNDING_WEIGHTS}
+    if result.explanation:
+        out["explanation"] = result.explanation
+    if result.candidate_breakdowns is not None:
+        out["candidate_breakdowns"] = result.candidate_breakdowns
+    if result.goal is not None:
+        out["goal_score"] = round(result.goal.score, 4)
+    return out
+
+
 @app.post("/command")
 async def push_command(req: CommandRequest) -> dict[str, Any]:
     """Phase 6: parse a user utterance and ground it against the live map.
@@ -472,15 +492,26 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
             "intent": intent.model_dump(),
             "status": result.status,
             "candidates": result.candidates,
+            **_reasoning_fields(result),
         }
 
     if result.status == "empty_map":
         runtime.ask(result.explanation)
-        return {"parsed": True, "intent": intent.model_dump(), "status": result.status}
+        return {
+            "parsed": True,
+            "intent": intent.model_dump(),
+            "status": result.status,
+            **_reasoning_fields(result),
+        }
 
     if result.status == "no_match":
         runtime.ask(result.explanation or "I don't see that.")
-        return {"parsed": True, "intent": intent.model_dump(), "status": result.status}
+        return {
+            "parsed": True,
+            "intent": intent.model_dump(),
+            "status": result.status,
+            **_reasoning_fields(result),
+        }
 
     # success
     goal = result.goal
@@ -546,6 +577,7 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
             "status": "plan_failed",
             "planner_status": plan.status,
             "goal": goal.model_dump(),
+            **_reasoning_fields(result),
         }
 
     # Phase 8: run the offline pure-pursuit simulator over the planner's
@@ -573,6 +605,7 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
         "path_waypoints": len(plan.path_world),
         "control_steps": trace.summary.steps,
         "control_status": trace.summary.status,
+        **_reasoning_fields(result),
     }
 
 

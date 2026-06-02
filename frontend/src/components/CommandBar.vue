@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import type { PetAction } from "../composables/useWebSocket";
+import type { CommandResult, PetAction } from "../composables/useWebSocket";
 
-const emit = defineEmits<{ (e: "send", payload: PetAction): void }>();
+const emit = defineEmits<{
+  (e: "send", payload: PetAction): void;
+  (e: "command-result", result: CommandResult): void;
+}>();
 
 const text = ref("");
 
@@ -68,11 +71,16 @@ function submit() {
 
 async function postCommand(t: string): Promise<void> {
   try {
-    await fetch("/command", {
+    const resp = await fetch("/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: t }),
     });
+    // The movement/speech arrive over the WS stream; the JSON response carries
+    // the grounding reasoning (intent, score breakdown, planner status) that the
+    // explanation panel + path-failure overlay consume.
+    const body = await resp.json();
+    emit("command-result", { ...body, received_at: Date.now(), utterance: t });
   } catch (err) {
     console.warn("command POST failed", err);
   }

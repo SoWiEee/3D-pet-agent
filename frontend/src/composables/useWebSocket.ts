@@ -83,6 +83,51 @@ export interface CoveragePayload {
   cells: number[][]; // [height][width] observation counts
 }
 
+/** Shape of `GET /planning/occupancy` (OccupancyGrid.to_dict). */
+export interface OccupancyPayload {
+  resolution: number;
+  origin: [number, number]; // [x, z]
+  width: number;
+  height: number;
+  obstacle_ids: string[];
+  data: number[]; // flattened row-major (height*width); 1 = blocked, 0 = free
+}
+
+/** One candidate's grounding score breakdown (POST /command). */
+export interface GroundingBreakdown {
+  object_id: string;
+  class_label?: string;
+  total: number;
+  semantic: number;
+  attribute: number;
+  relation: number;
+  visibility: number;
+  feasibility: number;
+}
+
+export interface CommandIntentView {
+  raw_text?: string;
+  intent_type: string;
+  target?: { class_label?: string | null; attributes?: string[] } | null;
+  spatial_relation?: { relation?: string; anchor?: unknown } | null;
+  confidence?: number;
+}
+
+/** Parsed POST /command response, surfaced in the reasoning panel. */
+export interface CommandResult {
+  parsed: boolean;
+  intent?: CommandIntentView;
+  status?: string;
+  explanation?: string;
+  candidate_breakdowns?: GroundingBreakdown[];
+  weights?: Record<string, number>;
+  goal_score?: number;
+  planner_status?: string;
+  candidates?: [string, number][];
+  received_at: number;
+  utterance: string;
+}
+
 export interface PetAction {
   action:
     | "move_to"

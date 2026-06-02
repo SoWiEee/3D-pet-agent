@@ -81,6 +81,33 @@ def test_move_to_unique_target_succeeds(
     assert r.goal.target_position_world is not None
 
 
+def test_success_exposes_candidate_breakdowns(
+    resolver: GroundingResolver, parser: RuleCommandParser
+) -> None:
+    """The explanation panel needs per-component scores, not just totals."""
+    m = SemanticMap()
+    _populate(
+        m,
+        [
+            _obj(object_id="cup_001", label="cup", center=(0.0, 0.0, -1.5)),
+            _obj(object_id="kbd_001", label="keyboard", center=(0.8, 0.0, -1.7)),
+        ],
+    )
+    intent = parser.parse("go to the cup")
+    assert intent is not None
+    r = resolver.resolve(intent, m)
+    assert r.status == "success"
+    assert r.candidate_breakdowns is not None and len(r.candidate_breakdowns) >= 1
+    top = r.candidate_breakdowns[0]
+    for key in ("object_id", "total", "semantic", "attribute", "relation", "visibility", "feasibility"):
+        assert key in top
+    # The winning candidate's component-weighted total matches its reported total.
+    from src.planning.grounding_resolver import GROUNDING_WEIGHTS
+
+    recomputed = sum(GROUNDING_WEIGHTS[k] * float(top[k]) for k in GROUNDING_WEIGHTS)
+    assert recomputed == pytest.approx(float(top["total"]), abs=1e-3)
+
+
 def test_two_matching_objects_trigger_clarification(
     resolver: GroundingResolver, parser: RuleCommandParser
 ) -> None:

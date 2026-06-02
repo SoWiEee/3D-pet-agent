@@ -3,13 +3,16 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vu
 import { PetScene } from "./renderer/PetScene";
 import {
   usePetSocket,
+  type CommandResult,
   type CoveragePayload,
+  type OccupancyPayload,
   type PetAction,
   type SceneGraphPayload,
   type WorldObjectMarker,
 } from "./composables/useWebSocket";
 import StatusBar from "./components/StatusBar.vue";
 import SpatialInsightsModal from "./components/SpatialInsightsModal.vue";
+import ReasoningModal from "./components/ReasoningModal.vue";
 import EventStreamModal from "./components/EventStreamModal.vue";
 import CommandBar from "./components/CommandBar.vue";
 import RegistrationMarks from "./components/RegistrationMarks.vue";
@@ -29,6 +32,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  if (occupancyTimer) window.clearTimeout(occupancyTimer);
   scene?.dispose();
 });
 
@@ -105,6 +109,33 @@ function onCommand(payload: PetAction) {
   send(payload);
 }
 
+// ── grounding reasoning panel + path-failure overlay ──────────────────────
+const lastReasoning = shallowRef<CommandResult | null>(null);
+const PLAN_FAILURE_STATES = new Set(["plan_failed", "no_path", "goal_unreachable", "start_blocked"]);
+let occupancyTimer: number | undefined;
+
+async function showOccupancyOverlay() {
+  try {
+    const r = await fetch("/planning/occupancy");
+    if (!r.ok) return;
+    const p = (await r.json()) as OccupancyPayload;
+    scene?.setOccupancy(p);
+    // Auto-retire after 5 s — it's a transient "here's why" cue, not a layer.
+    if (occupancyTimer) window.clearTimeout(occupancyTimer);
+    occupancyTimer = window.setTimeout(() => scene?.setOccupancy(null), 5000);
+  } catch (e) {
+    console.warn("occupancy fetch failed", e);
+  }
+}
+
+function onCommandResult(result: CommandResult) {
+  lastReasoning.value = result;
+  const failed =
+    PLAN_FAILURE_STATES.has(result.status ?? "") ||
+    (result.planner_status != null && result.planner_status !== "success");
+  if (failed) void showOccupancyOverlay();
+}
+
 const speechText = computed(() => petState.value?.speech ?? null);
 
 // Compact pose HUD overlaid bottom-left of the cat viewport.
@@ -130,11 +161,15 @@ const emotionEmoji = computed(
 
 const insightsOpen = ref(false);
 const eventsOpen = ref(false);
+const reasoningOpen = ref(false);
 function toggleInsights() {
   insightsOpen.value = !insightsOpen.value;
 }
 function toggleEvents() {
   eventsOpen.value = !eventsOpen.value;
+}
+function toggleReasoning() {
+  reasoningOpen.value = !reasoningOpen.value;
 }
 
 // CoverageGrid debug overlay — pulled on demand from /exploration/coverage
@@ -166,6 +201,7 @@ function toggleCoverage() {
       :perception-hz="2"
       @toggle-insights="toggleInsights"
       @toggle-events="toggleEvents"
+      @toggle-reasoning="toggleReasoning"
     />
 
     <section class="stage">
@@ -208,7 +244,7 @@ function toggleCoverage() {
       </div>
     </section>
 
-    <CommandBar @send="onCommand" />
+    <CommandBar @send="onCommand" @command-result="onCommandResult" />
 
     <SpatialInsightsModal
       :open="insightsOpen"
@@ -220,6 +256,11 @@ function toggleCoverage() {
       :open="eventsOpen"
       :history="history"
       @close="eventsOpen = false"
+    />
+    <ReasoningModal
+      :open="reasoningOpen"
+      :result="lastReasoning"
+      @close="reasoningOpen = false"
     />
   </main>
 </template>

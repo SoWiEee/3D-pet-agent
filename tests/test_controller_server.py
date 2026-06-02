@@ -62,6 +62,44 @@ def test_last_trace_endpoint_starts_empty() -> None:
     assert body == {}
 
 
+def _lift_one_cup(c: TestClient, x: float = 0.6, z: float = 0.8) -> None:
+    c.post(
+        "/perception/lifted",
+        json={
+            "objects": [
+                {
+                    "object_id": "cup_x",
+                    "class_label": "cup",
+                    "bbox_xyxy": [0, 0, 10, 10],
+                    "center_2d": [5, 5],
+                    "center_3d_world": [x, 0.0, z],
+                    "extent_3d": [0.1, 0.12, 0.1],
+                    "median_depth": 1.0,
+                    "depth_uncertainty": 0.05,
+                    "source_backend": "mainline_grounding_sam",
+                    "confidence": {"detector": 0.9, "overall": 0.85},
+                    "last_seen_frame": 1,
+                    "tracking_status": "tracked",
+                }
+            ]
+        },
+    )
+
+
+def test_command_success_returns_reasoning_fields() -> None:
+    c = _client()
+    _lift_one_cup(c)
+    body = c.post("/command", json={"text": "go to the cup"}).json()
+    assert body["parsed"] is True
+    assert body["status"] == "success"
+    # Reasoning panel payload.
+    assert "weights" in body and set(body["weights"]) >= {"semantic", "relation"}
+    assert "explanation" in body and body["explanation"]
+    assert isinstance(body["candidate_breakdowns"], list) and body["candidate_breakdowns"]
+    assert body["candidate_breakdowns"][0]["object_id"] == "track_001"
+    assert "goal_score" in body
+
+
 def test_initial_state_derives_heading_from_path() -> None:
     srv.runtime.state.position.x = 0.0
     srv.runtime.state.position.z = 0.0

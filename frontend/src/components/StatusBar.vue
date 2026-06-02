@@ -10,6 +10,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "toggle-insights"): void;
   (e: "toggle-events"): void;
+  (e: "toggle-reasoning"): void;
 }>();
 
 const now = computed(() => {
@@ -38,6 +39,9 @@ const connLabel = computed(() => ({
       </button>
       <button class="insights-btn" type="button" @click="emit('toggle-events')">
         活動紀錄
+      </button>
+      <button class="insights-btn" type="button" @click="emit('toggle-reasoning')">
+        上一次推理
       </button>
       <span class="kv"><em>連線</em>
         <span class="tag" :class="connLabel.cls">● {{ connLabel.text }}</span>
