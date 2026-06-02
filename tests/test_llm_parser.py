@@ -47,9 +47,11 @@ class _FakeClient:
 
 
 def _ok_response(intent_kwargs: dict[str, Any]) -> _FakeResponse:
-    return _FakeResponse([
-        _FakeBlock("tool_use", name="emit_command_intent", input_=intent_kwargs),
-    ])
+    return _FakeResponse(
+        [
+            _FakeBlock("tool_use", name="emit_command_intent", input_=intent_kwargs),
+        ]
+    )
 
 
 # ── LLMCommandParser ───────────────────────────────────────────────────────
@@ -57,15 +59,17 @@ def _ok_response(intent_kwargs: dict[str, Any]) -> _FakeResponse:
 
 def test_llm_parser_returns_intent_on_valid_tool_use() -> None:
     client = _FakeClient(
-        _ok_response({
-            "raw_text": "ignored — will be overwritten",
-            "intent_type": "move_to",
-            "target": {"class_label": "cup", "attributes": ["red"], "object_id": None},
-            "spatial_relation": None,
-            "constraints": [],
-            "fallback": "ask_clarification",
-            "confidence": 0.9,
-        })
+        _ok_response(
+            {
+                "raw_text": "ignored — will be overwritten",
+                "intent_type": "move_to",
+                "target": {"class_label": "cup", "attributes": ["red"], "object_id": None},
+                "spatial_relation": None,
+                "constraints": [],
+                "fallback": "ask_clarification",
+                "confidence": 0.9,
+            }
+        )
     )
     parser = LLMCommandParser(client_factory=lambda: client)
 
@@ -88,9 +92,7 @@ def test_llm_parser_falls_back_when_client_factory_raises() -> None:
 
 
 def test_llm_parser_falls_back_when_api_call_raises() -> None:
-    parser = LLMCommandParser(
-        client_factory=lambda: _FakeClient(RuntimeError("rate limited"))
-    )
+    parser = LLMCommandParser(client_factory=lambda: _FakeClient(RuntimeError("rate limited")))
     assert parser.parse("go to the cup") is None
 
 
@@ -114,9 +116,7 @@ def test_llm_parser_accepts_json_string_input_in_tool_use() -> None:
         name="emit_command_intent",
         input_='{"raw_text": "x", "intent_type": "stop", "confidence": 0.5}',
     )
-    parser = LLMCommandParser(
-        client_factory=lambda: _FakeClient(_FakeResponse([block]))
-    )
+    parser = LLMCommandParser(client_factory=lambda: _FakeClient(_FakeResponse([block])))
     intent = parser.parse("halt")
     assert intent is not None
     assert intent.intent_type == "stop"
@@ -151,12 +151,14 @@ def test_parse_command_calls_llm_when_enabled(monkeypatch) -> None:
     monkeypatch.setenv("PET_AGENT_LLM_PARSER", "on")
 
     fake = _FakeClient(
-        _ok_response({
-            "raw_text": "",
-            "intent_type": "hide",
-            "target": {"class_label": "keyboard"},
-            "confidence": 0.8,
-        })
+        _ok_response(
+            {
+                "raw_text": "",
+                "intent_type": "hide",
+                "target": {"class_label": "keyboard"},
+                "confidence": 0.8,
+            }
+        )
     )
     from src.language import command_parser as cp
 

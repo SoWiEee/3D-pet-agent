@@ -162,9 +162,7 @@ perception_loop: PerceptionLoop | None = (
 # Restart resilience — `uvicorn` restart preserves the map by default. The
 # env var lets tests / staging override the path; absence of the file is
 # a clean "fresh boot" (no error, no log noise beyond a debug line).
-_SEMANTIC_MAP_PATH = Path(
-    os.environ.get("PET_AGENT_SEMANTIC_MAP_PATH", "runs/last_map.json")
-)
+_SEMANTIC_MAP_PATH = Path(os.environ.get("PET_AGENT_SEMANTIC_MAP_PATH", "runs/last_map.json"))
 
 
 def _try_autoload_semantic_map(target: SemanticMap, path: Path) -> int:
@@ -189,9 +187,7 @@ def _try_autoload_semantic_map(target: SemanticMap, path: Path) -> int:
         target._objects[k] = v
     target.last_frame_id = loaded.last_frame_id
     target.last_updated = loaded.last_updated
-    log.info(
-        "autoloaded SemanticMap: %d objects from %s", len(loaded._objects), path
-    )
+    log.info("autoloaded SemanticMap: %d objects from %s", len(loaded._objects), path)
     return len(loaded._objects)
 
 
@@ -307,7 +303,11 @@ async def post_perception_start(req: PerceptionStartRequest) -> dict[str, Any]:
     if perception_loop is None:
         return {"started": False, "reason": "perception loop unavailable (config load failed)"}
     if perception_loop.running:
-        return {"started": False, "reason": "already running", "status": perception_loop.status.__dict__}
+        return {
+            "started": False,
+            "reason": "already running",
+            "status": perception_loop.status.__dict__,
+        }
     prompts = req.prompts or _load_prompts()
     try:
         await perception_loop.start(

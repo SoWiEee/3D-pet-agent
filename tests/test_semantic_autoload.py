@@ -130,18 +130,14 @@ def test_save_endpoint_writes_snapshot_to_default_path(
     assert target.exists()
 
 
-def test_save_endpoint_honours_explicit_path(
-    client: TestClient, tmp_path: Path
-) -> None:
+def test_save_endpoint_honours_explicit_path(client: TestClient, tmp_path: Path) -> None:
     custom = tmp_path / "custom.json"
     resp = client.post("/semantic/save", json={"path": str(custom)})
     assert resp.json()["saved"] is True
     assert custom.exists()
 
 
-def test_save_round_trip_via_endpoint_and_autoload(
-    client: TestClient, tmp_path: Path
-) -> None:
+def test_save_round_trip_via_endpoint_and_autoload(client: TestClient, tmp_path: Path) -> None:
     """End-to-end: save via endpoint → reset map → autoload populates it."""
     custom = tmp_path / "rt.json"
     obj = {
