@@ -580,12 +580,17 @@ const STATUS_FADE: Record<TrackingStatusLite, [number, number, number]> = {
 class WorldObjectsLayer {
   group = new THREE.Group();
   private items: { group: THREE.Group; mats: THREE.Material[]; geos: THREE.BufferGeometry[] }[] = [];
-  private dotGeo = new THREE.SphereGeometry(0.025, 14, 12);
+  // Smaller centroid pin — the real-size box is the dominant visual cue now.
+  private dotGeo = new THREE.SphereGeometry(0.012, 12, 10);
   private haloGeo = new THREE.RingGeometry(0.05, 0.06, 32);
+  // Floor extent for missing / degenerate `extent_3d` values so a 0-sized
+  // box never produces a degenerate mesh.
+  private static readonly MIN_EXTENT = 0.02;
 
   update(
     markers: {
       center: [number, number, number];
+      extent?: [number, number, number];
       label: string;
       depth?: number;
       tracking_status?: TrackingStatusLite;
@@ -623,11 +628,49 @@ class WorldObjectsLayer {
       });
 
       const item = new THREE.Group();
+
+      // Real-size bounding box — sized from extent_3d so the user can see
+      // each object at its actual physical scale relative to the cat.
+      const ex = Math.max(m.extent?.[0] ?? 0.08, WorldObjectsLayer.MIN_EXTENT);
+      const ey = Math.max(m.extent?.[1] ?? 0.08, WorldObjectsLayer.MIN_EXTENT);
+      const ez = Math.max(m.extent?.[2] ?? 0.08, WorldObjectsLayer.MIN_EXTENT);
+      const boxGeo = new THREE.BoxGeometry(ex, ey, ez);
+      const boxMat = new THREE.MeshStandardMaterial({
+        color: 0x74f7d0,
+        transparent: true,
+        opacity: dotOp * 0.18,
+        roughness: 0.85,
+        metalness: 0.0,
+        emissive: 0x1a3a30,
+        emissiveIntensity: 0.4,
+        depthWrite: false,
+      });
+      const box = new THREE.Mesh(boxGeo, boxMat);
+      // center_3d_world reports the centroid; Y is treated as the centroid
+      // height too, so the box centre sits on the reported centre.
+      box.position.set(x, y, z);
+      item.add(box);
+
+      // Crisp wireframe edges on top of the translucent fill so silhouettes
+      // stay readable through the fog.
+      const edgesGeo = new THREE.EdgesGeometry(boxGeo);
+      const edgesMat = new THREE.LineBasicMaterial({
+        color: 0x74f7d0,
+        transparent: true,
+        opacity: dotOp * 0.7,
+      });
+      const edges = new THREE.LineSegments(edgesGeo, edgesMat);
+      edges.position.copy(box.position);
+      item.add(edges);
+
+      // Centroid pin (small) — keeps the debug "this is where backend
+      // thinks the object centre is" cue.
       const dot = new THREE.Mesh(this.dotGeo, dotMat);
       dot.position.set(x, y, z);
       item.add(dot);
 
-      // Vertical stalk down to the floor for readability.
+      // Vertical stalk down to the floor for readability when the box is
+      // floating in space (e.g. a monitor above the desk plane).
       const stalkGeo = new THREE.BufferGeometry().setFromPoints([
         new THREE.Vector3(x, y, z),
         new THREE.Vector3(x, 0.002, z),
@@ -640,14 +683,14 @@ class WorldObjectsLayer {
       halo.position.set(x, 0.003, z);
       item.add(halo);
 
-      // Labels live in the Readouts panel — see App.vue.
+      // Labels live in the SpatialInsightsModal panel — see App.vue.
       void m.label;
 
       this.group.add(item);
       this.items.push({
         group: item,
-        mats: [dotMat, stalkMat, haloMat],
-        geos: [stalkGeo],
+        mats: [boxMat, edgesMat, dotMat, stalkMat, haloMat],
+        geos: [boxGeo, edgesGeo, stalkGeo],
       });
     }
   }

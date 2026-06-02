@@ -56,6 +56,9 @@ watch(lastAction, (a: PetAction | null) => {
     scene.setWorldObjects(
       a.world_objects.map((m) => ({
         center: m.center_3d_world,
+        // Forward extent_3d so the renderer can draw a real-size box.
+        // Falls back to a small cube when backend hasn't lifted extents.
+        extent: m.extent_3d ?? [0.08, 0.08, 0.08],
         label: m.class_label,
         depth: m.median_depth,
         tracking_status: m.tracking_status,

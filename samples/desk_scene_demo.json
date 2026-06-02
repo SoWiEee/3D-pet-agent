@@ -1,0 +1,90 @@
+{
+  "frame_id": 1,
+  "objects": [
+    {
+      "object_id": "cup_001",
+      "class_label": "cup",
+      "attributes": ["red"],
+      "bbox_xyxy": [100, 200, 180, 320],
+      "center_2d": [140, 260],
+      "center_3d_world": [1.5, 0.0, 1.8],
+      "extent_3d": [0.08, 0.12, 0.08],
+      "median_depth": 1.0,
+      "depth_uncertainty": 0.05,
+      "source_backend": "mainline_grounding_sam",
+      "confidence": {"detector": 0.85, "mask_quality": 0.8, "depth_quality": 0.9, "tracking": 1.0, "overall": 0.85},
+      "last_seen_frame": 1,
+      "tracking_status": "tracked"
+    },
+    {
+      "object_id": "keyboard_001",
+      "class_label": "keyboard",
+      "bbox_xyxy": [300, 400, 700, 500],
+      "center_2d": [500, 450],
+      "center_3d_world": [0.0, 0.0, 1.8],
+      "extent_3d": [0.4, 0.04, 0.15],
+      "median_depth": 1.0,
+      "depth_uncertainty": 0.05,
+      "source_backend": "mainline_grounding_sam",
+      "confidence": {"detector": 0.9, "mask_quality": 0.85, "depth_quality": 0.9, "tracking": 1.0, "overall": 0.9},
+      "last_seen_frame": 1,
+      "tracking_status": "tracked"
+    },
+    {
+      "object_id": "mouse_001",
+      "class_label": "mouse",
+      "bbox_xyxy": [800, 420, 900, 500],
+      "center_2d": [850, 460],
+      "center_3d_world": [0.9, 0.0, 1.2],
+      "extent_3d": [0.06, 0.03, 0.1],
+      "median_depth": 0.9,
+      "depth_uncertainty": 0.05,
+      "source_backend": "mainline_grounding_sam",
+      "confidence": {"detector": 0.8, "mask_quality": 0.75, "depth_quality": 0.85, "tracking": 1.0, "overall": 0.8},
+      "last_seen_frame": 1,
+      "tracking_status": "tracked"
+    },
+    {
+      "object_id": "monitor_001",
+      "class_label": "monitor",
+      "bbox_xyxy": [200, 50, 800, 350],
+      "center_2d": [500, 200],
+      "center_3d_world": [0.0, 1.0, 3.0],
+      "extent_3d": [0.55, 0.32, 0.05],
+      "median_depth": 1.4,
+      "depth_uncertainty": 0.06,
+      "source_backend": "mainline_grounding_sam",
+      "confidence": {"detector": 0.92, "mask_quality": 0.9, "depth_quality": 0.85, "tracking": 1.0, "overall": 0.92},
+      "last_seen_frame": 1,
+      "tracking_status": "tracked"
+    },
+    {
+      "object_id": "box_001",
+      "class_label": "box",
+      "bbox_xyxy": [850, 300, 1000, 450],
+      "center_2d": [925, 375],
+      "center_3d_world": [2.4, 0.0, 1.5],
+      "extent_3d": [0.15, 0.15, 0.15],
+      "median_depth": 1.1,
+      "depth_uncertainty": 0.06,
+      "source_backend": "mainline_grounding_sam",
+      "confidence": {"detector": 0.82, "mask_quality": 0.8, "depth_quality": 0.85, "tracking": 1.0, "overall": 0.82},
+      "last_seen_frame": 1,
+      "tracking_status": "tracked"
+    },
+    {
+      "object_id": "chair_001",
+      "class_label": "chair",
+      "bbox_xyxy": [100, 500, 300, 700],
+      "center_2d": [200, 600],
+      "center_3d_world": [-2.1, 0.0, 0.9],
+      "extent_3d": [0.4, 0.5, 0.4],
+      "median_depth": 0.8,
+      "depth_uncertainty": 0.07,
+      "source_backend": "mainline_grounding_sam",
+      "confidence": {"detector": 0.78, "mask_quality": 0.75, "depth_quality": 0.8, "tracking": 1.0, "overall": 0.78},
+      "last_seen_frame": 1,
+      "tracking_status": "tracked"
+    }
+  ]
+}
