@@ -7,6 +7,10 @@ const props = defineProps<{
   state: PetState | null;
   perceptionHz?: number;
 }>();
+const emit = defineEmits<{
+  (e: "toggle-insights"): void;
+  (e: "toggle-events"): void;
+}>();
 
 const now = computed(() => {
   const d = new Date();
@@ -14,10 +18,10 @@ const now = computed(() => {
 });
 
 const connLabel = computed(() => ({
-  connecting: { text: "linking", cls: "tag--amber" },
-  open: { text: "online", cls: "tag--phosphor" },
-  closed: { text: "offline", cls: "tag--coral" },
-  error: { text: "fault", cls: "tag--coral" },
+  connecting: { text: "連線中", cls: "tag--amber" },
+  open: { text: "已連線", cls: "tag--phosphor" },
+  closed: { text: "已斷線", cls: "tag--coral" },
+  error: { text: "異常", cls: "tag--coral" },
 }[props.conn]));
 </script>
 
@@ -25,22 +29,21 @@ const connLabel = computed(() => ({
   <header class="bar">
     <div class="bar__left">
       <span class="mark">◑</span>
-      <span class="brand">3d&nbsp;·&nbsp;pet&nbsp;·&nbsp;agent</span>
-      <span class="subbrand">// perceptual&nbsp;console&nbsp;v0.1</span>
-    </div>
-
-    <div class="bar__mid">
-      <span class="kv"><em>node</em><b>tabletop-01</b></span>
-      <span class="kv"><em>backend</em><b>mainline · grounding+sam</b></span>
-      <span class="kv"><em>perception&nbsp;hz</em><b>{{ (props.perceptionHz ?? 2).toFixed(1) }}</b></span>
+      <span class="brand">3D 寵物代理</span>
     </div>
 
     <div class="bar__right">
-      <span class="kv"><em>link</em>
+      <button class="insights-btn" type="button" @click="emit('toggle-insights')">
+        顯示空間資訊
+      </button>
+      <button class="insights-btn" type="button" @click="emit('toggle-events')">
+        活動紀錄
+      </button>
+      <span class="kv"><em>連線</em>
         <span class="tag" :class="connLabel.cls">● {{ connLabel.text }}</span>
       </span>
-      <span class="kv"><em>state</em><b>{{ props.state?.animation ?? "—" }}</b></span>
-      <span class="kv"><em>utc</em><b>{{ now }}</b></span>
+      <span class="kv"><em>狀態</em><b>{{ props.state?.animation ?? "—" }}</b></span>
+      <span class="kv"><em>時間</em><b>{{ now }}</b></span>
     </div>
   </header>
 </template>
@@ -48,7 +51,7 @@ const connLabel = computed(() => ({
 <style scoped>
 .bar {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: auto 1fr;
   align-items: center;
   gap: 24px;
   padding: 10px 18px;
@@ -62,8 +65,23 @@ const connLabel = computed(() => ({
   z-index: 5;
 }
 .bar__left { display: flex; align-items: baseline; gap: 12px; }
-.bar__mid { display: flex; align-items: center; gap: 22px; justify-content: center; }
-.bar__right { display: flex; align-items: center; gap: 22px; justify-content: flex-end; }
+.bar__right { display: flex; align-items: center; gap: 18px; justify-content: flex-end; }
+
+.insights-btn {
+  background: transparent;
+  border: 1px solid var(--c-phosphor-dim);
+  color: var(--c-phosphor);
+  padding: 4px 12px;
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.insights-btn:hover {
+  border-color: var(--c-phosphor);
+  background: rgba(116, 247, 208, 0.08);
+}
 
 .mark { color: var(--c-phosphor); font-size: 16px; line-height: 1; }
 .brand {

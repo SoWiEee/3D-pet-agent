@@ -8,8 +8,8 @@ import {
   type WorldObjectMarker,
 } from "./composables/useWebSocket";
 import StatusBar from "./components/StatusBar.vue";
-import ModulePanel from "./components/ModulePanel.vue";
-import Readouts from "./components/Readouts.vue";
+import SpatialInsightsModal from "./components/SpatialInsightsModal.vue";
+import EventStreamModal from "./components/EventStreamModal.vue";
 import CommandBar from "./components/CommandBar.vue";
 import RegistrationMarks from "./components/RegistrationMarks.vue";
 import PetSpeech from "./components/PetSpeech.vue";
@@ -85,30 +85,54 @@ watch(lastAction, (a: PetAction | null) => {
   }
 });
 
-const modules = computed(() => [
-  { name: "detector · groundingdino", status: status.value === "open" ? "online" as const : "idle" as const, note: "open-vocab · text-conditioned" },
-  { name: "segmenter · sam", status: status.value === "open" ? "online" as const : "idle" as const, note: "promptable · box → mask" },
-  { name: "depth · anything v2", status: status.value === "open" ? "online" as const : "idle" as const, note: "monocular · depth-anything-v2-small" },
-  { name: "tracker · iou+bytetrack", status: "off" as const, note: "phase 4" },
-  { name: "scene graph", status: status.value === "open" ? "online" as const : "idle" as const, note: "phase 5 · 11 relations" },
-  { name: "command parser", status: status.value === "open" ? "online" as const : "idle" as const, note: "phase 6 · rule fallback · llm optional" },
-  { name: "grounding resolver", status: status.value === "open" ? "online" as const : "idle" as const, note: "phase 6 · semantic+attr+rel+vis+feas" },
-]);
-
 function onCommand(payload: PetAction) {
   send(payload);
 }
 
 const speechText = computed(() => petState.value?.speech ?? null);
+
+// Compact pose HUD overlaid bottom-left of the cat viewport.
+const pose = computed(() => petState.value?.position ?? { x: 0, y: 0, z: 0 });
+function fmtCoord(n: number) {
+  const s = n.toFixed(2);
+  return n >= 0 ? "+" + s : s;
+}
+
+// Map PetState.emotion to a single glyph. Falls back to a generic cat face
+// for unknown / null emotions so the HUD never goes empty.
+const EMOTION_EMOJI: Record<string, string> = {
+  neutral: "😺",
+  happy: "😸",
+  curious: "🐱",
+  confused: "😿",
+  scared: "🙀",
+  playful: "😻",
+};
+const emotionEmoji = computed(
+  () => EMOTION_EMOJI[petState.value?.emotion ?? "neutral"] ?? "😺",
+);
+
+const insightsOpen = ref(false);
+const eventsOpen = ref(false);
+function toggleInsights() {
+  insightsOpen.value = !insightsOpen.value;
+}
+function toggleEvents() {
+  eventsOpen.value = !eventsOpen.value;
+}
 </script>
 
 <template>
   <main class="app">
-    <StatusBar :conn="status" :state="petState" :perception-hz="2" />
+    <StatusBar
+      :conn="status"
+      :state="petState"
+      :perception-hz="2"
+      @toggle-insights="toggleInsights"
+      @toggle-events="toggleEvents"
+    />
 
     <section class="stage">
-      <ModulePanel :modules="modules" />
-
       <div class="viewport-wrap">
         <div ref="viewport" class="viewport" />
         <RegistrationMarks />
@@ -124,30 +148,50 @@ const speechText = computed(() => petState.value?.speech ?? null);
           <span class="vp-label__id">GRID</span>
           <span class="vp-label__name">12 m · 0.5 m / div</span>
         </div>
+
+        <!-- Compact bottom-left HUD: x / y / z · v · emoji. -->
+        <div class="vp-hud">
+          <span class="vp-hud__pair"><em>x</em><b>{{ fmtCoord(pose.x) }}</b></span>
+          <span class="vp-hud__pair"><em>y</em><b>{{ fmtCoord(pose.y) }}</b></span>
+          <span class="vp-hud__pair"><em>z</em><b>{{ fmtCoord(pose.z) }}</b></span>
+          <span class="vp-hud__pair"><em>v</em><b>{{ (petState?.speed ?? 0).toFixed(2) }}</b></span>
+          <span class="vp-hud__emoji" :title="petState?.emotion ?? 'neutral'">{{ emotionEmoji }}</span>
+        </div>
+
         <PetSpeech :text="speechText" />
       </div>
     </section>
 
-    <Readouts
-      :state="petState"
-      :history="history"
+    <CommandBar @send="onCommand" />
+
+    <SpatialInsightsModal
+      :open="insightsOpen"
       :world-objects="worldObjects"
       :scene-graph="sceneGraph"
+      @close="insightsOpen = false"
     />
-    <CommandBar @send="onCommand" />
+    <EventStreamModal
+      :open="eventsOpen"
+      :history="history"
+      @close="eventsOpen = false"
+    />
   </main>
 </template>
 
 <style scoped>
 .app {
   display: grid;
-  grid-template-rows: auto 1fr auto auto;
+  /* Rows: StatusBar · viewport (fills) · CommandBar.
+     The standalone Readouts row is gone — pose is now overlaid on the
+     viewport so the cat panel gets the full vertical space. */
+  grid-template-rows: auto 1fr auto;
   height: 100vh;
   width: 100vw;
 }
 .stage {
+  /* Full-width viewport now that the left ModulePanel column is gone. */
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 1fr;
   min-height: 0;
   position: relative;
 }
@@ -176,4 +220,35 @@ const speechText = computed(() => petState.value?.speech ?? null);
 .vp-label--tl { top: 22px; left: 60px; }
 .vp-label--tr { top: 22px; right: 60px; }
 .vp-label--br { bottom: 22px; right: 60px; }
+
+/* Compact pose HUD — bottom-left of the viewport. No card chrome. */
+.vp-hud {
+  position: absolute;
+  bottom: 22px;
+  left: 60px;
+  z-index: 6;
+  display: inline-flex;
+  gap: 14px;
+  align-items: baseline;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+.vp-hud__pair { display: inline-flex; gap: 4px; align-items: baseline; }
+.vp-hud__pair em {
+  font-style: normal;
+  color: var(--c-bone-faint);
+  font-size: 11px;
+}
+.vp-hud__pair b {
+  color: var(--c-phosphor);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+.vp-hud__emoji {
+  font-size: 18px;
+  line-height: 1;
+  margin-left: 4px;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+}
 </style>

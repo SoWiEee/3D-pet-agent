@@ -30,10 +30,10 @@ body {
     radial-gradient(900px 600px at -5% 110%, #0e1614 0%, transparent 60%),
     var(--c-ink-0);
   color: var(--c-bone);
-  font-family: var(--f-mono);
+  font-family: "Noto Sans TC", system-ui, -apple-system, sans-serif;
   font-weight: 400;
   font-size: 12px;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
