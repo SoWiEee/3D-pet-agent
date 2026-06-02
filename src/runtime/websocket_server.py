@@ -20,7 +20,9 @@ import asyncio
 import json
 import logging
 import math
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -156,9 +158,59 @@ perception_loop: PerceptionLoop | None = (
 )
 
 
+# ── B2: SemanticMap autoload / autosave ───────────────────────────────────
+# Restart resilience — `uvicorn` restart preserves the map by default. The
+# env var lets tests / staging override the path; absence of the file is
+# a clean "fresh boot" (no error, no log noise beyond a debug line).
+_SEMANTIC_MAP_PATH = Path(
+    os.environ.get("PET_AGENT_SEMANTIC_MAP_PATH", "runs/last_map.json")
+)
+
+
+def _try_autoload_semantic_map(target: SemanticMap, path: Path) -> int:
+    """Populate ``target`` from a JSON snapshot on disk.
+
+    The shared SemanticMap reference is **not** swapped — that would break
+    every component that captured a pointer to it at module import time
+    (perception loop, etc.). Instead we reset + repopulate in place.
+
+    Returns the number of objects loaded (0 means clean boot).
+    """
+    if not path.exists():
+        log.debug("no SemanticMap snapshot at %s; starting clean", path)
+        return 0
+    try:
+        loaded = SemanticMap.load(path)
+    except Exception as e:  # noqa: BLE001 — corrupt snapshot must not block boot
+        log.warning("SemanticMap autoload failed (%s); starting clean", e)
+        return 0
+    target.reset()
+    for k, v in loaded._objects.items():  # noqa: SLF001 — sibling module access
+        target._objects[k] = v
+    target.last_frame_id = loaded.last_frame_id
+    target.last_updated = loaded.last_updated
+    log.info(
+        "autoloaded SemanticMap: %d objects from %s", len(loaded._objects), path
+    )
+    return len(loaded._objects)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001
     log.info("pet runtime starting")
+    n_loaded = _try_autoload_semantic_map(semantic_map, _SEMANTIC_MAP_PATH)
+    if n_loaded > 0:
+        # Broadcast the autoloaded scene so freshly-connected clients see it
+        # without having to wait for the next perception POST.
+        markers = _map_to_markers(semantic_map)
+        graph = scene_graph_builder.build(semantic_map)
+        runtime._broadcast(  # noqa: SLF001
+            PetAction(
+                action="world_update",
+                world_objects=markers,
+                scene_graph=graph.to_dict(),
+            )
+        )
     yield
     log.info("pet runtime stopping")
 
@@ -347,6 +399,31 @@ async def get_occupancy_grid() -> dict[str, Any]:
 
     grid = build_occupancy_grid(semantic_map, cfg=planner.cfg.grid)
     return grid.to_dict()
+
+
+class SaveSemanticMapRequest(BaseModel):
+    path: str | None = None
+
+
+@app.post("/semantic/save")
+async def save_semantic_map(req: SaveSemanticMapRequest) -> dict[str, Any]:
+    """Persist the current SemanticMap to disk.
+
+    Defaults to ``PET_AGENT_SEMANTIC_MAP_PATH`` (``runs/last_map.json``)
+    so server restarts auto-restore the same snapshot on boot. Pass
+    ``{"path": "..."}`` to override.
+    """
+    target = Path(req.path) if req.path else _SEMANTIC_MAP_PATH
+    try:
+        semantic_map.save(target)
+    except Exception as e:  # noqa: BLE001
+        log.exception("SemanticMap save failed")
+        return {"saved": False, "reason": f"{type(e).__name__}: {e}"}
+    return {
+        "saved": True,
+        "path": str(target),
+        "objects": len(semantic_map.values()),
+    }
 
 
 @app.post("/semantic/reset")
