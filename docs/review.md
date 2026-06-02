@@ -141,7 +141,19 @@ look_at 9 / no_match 7 / hide 6 / explore 2 / stop 2 / report 1。
 
 工作正常但可以做得更好。
 
-### B1. Tracker 演算法
+### ✅ B1. Tracker 演算法 — 完成（commit `52c68ce`）
+
+`src/tracking/tracker.py` 改為 ByteTrack 兩階段 cascade：先用高信心偵測對所有
+活躍 track 配對，剩下未配對的 track 再對低信心偵測補一輪。低信心 box 只能「續命」
+既有 track，永不開新 track（faint box 多半是瞬間遮擋／模糊）。每個 track 帶 3D
+中心與 2D bbox 的 EMA 速度，配對時比對「預測位姿」而非上一幀位姿，快速等速運動下
+id 不跳。高/低分界用 `max(detector, overall)`，避免 `/perception/lifted`、eval
+runner 只填 `overall` 的物件被丟掉。新增 3 tests（低信心不開 track／低信心續命／
+速度模型保 id），既有 7 tests 全綠。
+
+---
+
+### B1. Tracker 演算法（原始描述）
 
 **現狀：** `src/tracking/tracker.py::_associate` 是貪婪的
 IoU + class + 3D-distance 匹配。
@@ -179,7 +191,17 @@ fallback to clean boot。原 SemanticMap reference 不換，避免 perception_lo
 
 ---
 
-### B3. WebSocket auto-reconnect
+### ✅ B3. WebSocket auto-reconnect — 完成（commit `a6eb9cc`）
+
+`useWebSocket.ts` 重連改為指數退避（base 500ms、cap 10s）＋ full jitter，多分頁
+不會同步重試。`onclose` 不再於元件卸載後排重連：`onBeforeUnmount` 設 `disposed`
+旗標、拆掉 `onclose`/`onerror` 後才 close。Server 端 `ws_pet` 在每次新連線都會回放
+pet state ＋ 最新 `world_update`，所以重連本身就會還原場景，前端不需重新訂閱。
+另外 export `reconnectAttempts` 供 UI 使用。
+
+---
+
+### B3. WebSocket auto-reconnect（原始描述）
 
 **現狀：** 前端 `useWebSocket.ts` 連線中斷後不會自動重連。
 
@@ -190,7 +212,20 @@ fallback to clean boot。原 SemanticMap reference 不換，避免 perception_lo
 
 ---
 
-### B4. Cat 動畫深度
+### ✅ B4. Cat 動畫深度 — 完成（commit `bd48482`）
+
+`Cat` 抽成獨立模組 `frontend/src/renderer/Cat.ts`，純程序化（不需 rig）深化動畫。
+姿態是一組由 animation ＋ emotion 解析出的 eased 標量：
+- walk/run 用對角四腳步態（hip-pivot 擺動）＋ footfall 下沉
+- `sit` 真的坐下（後低、前抬、後腿收）、`hide` 真的低身（趴平、耳朵後貼、尾巴收）
+- happy/curious/confused/scared/playful 各自疊加耳朵／尾巴／歪頭／顫抖表情線索
+
+所有標量以與幀率無關的方式 lerp，狀態間平滑過渡。已用 headless 截圖驗證場景無
+runtime error 正常渲染。
+
+---
+
+### B4. Cat 動畫深度（原始描述）
 
 **現狀：** `PetScene.ts::Cat` 只有：
 - Vertical bob（呼吸）
