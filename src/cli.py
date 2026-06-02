@@ -72,6 +72,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     # Demo
     p.add_argument("--camera", type=int, default=0)
+    # Eval / replay (Phase 10)
+    p.add_argument(
+        "--dataset",
+        type=Path,
+        help="JSONL DatasetEntry file for --mode eval (spec §13)",
+    )
+    p.add_argument(
+        "--commands",
+        type=Path,
+        help="JSONL of pre-grounded commands for --mode replay",
+    )
     return p
 
 
@@ -247,6 +258,39 @@ def run_demo(args: argparse.Namespace, cfg: AppConfig) -> int:  # noqa: ARG001
     return 0
 
 
+def run_eval(args: argparse.Namespace, cfg: AppConfig) -> int:  # noqa: ARG001
+    if not args.dataset:
+        log.error("eval mode requires --dataset <path.jsonl>")
+        return 2
+    if not args.dataset.exists():
+        log.error("dataset not found: %s", args.dataset)
+        return 2
+
+    from .evaluation import EvaluationRunner, summarize, write_report
+    from .evaluation.runner import load_dataset
+
+    entries = load_dataset(args.dataset)
+    log.info("loaded %d trials from %s", len(entries), args.dataset)
+
+    runner = EvaluationRunner()
+    records = runner.run_dataset(entries)
+    summary = summarize(records)
+
+    out_dir = args.out / f"eval_{int(time.time())}"
+    artifacts = write_report(records, out_dir)
+    log.info("wrote %d artifacts under %s", len(artifacts), out_dir)
+    for name, value in summary.as_table_rows():
+        log.info("  %s: %s", name, value)
+    # Non-zero exit code when any trial failed so CI can gate on this.
+    return 0 if summary.task_success_rate >= 0.5 else 1
+
+
+def run_replay(args: argparse.Namespace, cfg: AppConfig) -> int:
+    """Phase 10 replay — re-run the eval pipeline on a recorded dataset,
+    same code path as :func:`run_eval` but explicit about intent."""
+    return run_eval(args, cfg)
+
+
 def run_not_implemented(mode: str) -> int:
     log.error("mode %r is scaffolded but not implemented in Phase 1–2", mode)
     return 3
@@ -270,6 +314,10 @@ def main(argv: list[str] | None = None) -> int:
         return run_snapshot(args, cfg)
     if args.mode == "demo":
         return run_demo(args, cfg)
+    if args.mode == "eval":
+        return run_eval(args, cfg)
+    if args.mode == "replay":
+        return run_replay(args, cfg)
     return run_not_implemented(args.mode)
 
 

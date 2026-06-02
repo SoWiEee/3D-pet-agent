@@ -69,9 +69,10 @@ Backend Python modules under `src/`:
 - `cli.py` — `--mode` dispatch; `snapshot --lift` runs the Phase 3 lifter; `snapshot --track [--frames N]` runs the Phase 4 tracker + SemanticMap and writes `runs/semantic_map_<image>.json`.
 - `config.py` — pydantic `AppConfig` loaded from `configs/*.yaml`, `PET_AGENT_` env prefix. Sections: `models`, `thresholds`, `runtime`, `navigation`, `control`, `settings`.
 
+**Phase 10** added `src/evaluation/` (`schema`, `metrics`, `runner`, `report`) — `EvaluationRunner` loads `samples/eval_dataset.jsonl`, runs each trial through the in-process backend (parse → ground → plan → controller), writes JSONL + CSV + Markdown artifacts under `runs/eval_<ts>/`, and the CLI exits non-zero when task success rate drops below 50%. Latest run on the bundled 8-trial dataset: **8/8 trials task-successful (100%), mean latency 8.3 ms**. Canonical results in [`docs/eval.md`](docs/eval.md).
+
 Planned-but-not-yet:
 
-- `evaluation/` — datasets, metrics, replay (Phase 10).
 - `research/` — `openscene_backend`, `slam_adapter`, `rl_explorer` (optional spec §14).
 
 Frontend (`frontend/`) is Vue 3 + Vite + TypeScript + native Three.js (no React wrappers). `PetScene.ts` already implements `followPath(path[])` chaining tweens with heading lerp, so the controller can hand off paths without any frontend refactor.
@@ -85,8 +86,8 @@ A single CLI entrypoint (`main.py`) dispatches on `--mode`:
 | `sandbox` | ✅ Phase 1 | `--target X Y Z` or `--script foo.jsonl` |
 | `snapshot` | ✅ Phase 2 / 3 / 4 | `--image`, `--prompts`, `--out`, optional `--lift` + `--fov`, optional `--track [--frames N]` |
 | `demo` | Phase 7–9 | `--camera`, `--prompts` |
-| `replay` | Phase 10 | `--video`, `--commands` |
-| `eval` | Phase 10 | `--dataset` |
+| `replay` | ✅ Phase 10 (alias for eval) | `--dataset` |
+| `eval` | ✅ Phase 10 | `--dataset samples/eval_dataset.jsonl --out runs` |
 | `perception_debug` / `exploration` / `openscene_static` / `compare_backends` / `rl_exploration` / `ros_bridge` | scaffolded (rc=3) | see spec |
 
 ## Development Commands
@@ -95,7 +96,7 @@ A single CLI entrypoint (`main.py`) dispatches on `--mode`:
 source .venv/bin/activate
 uv pip install -e ".[dev]"
 
-# lint + tests (currently 227 passing)
+# lint + tests (currently 242 passing)
 .venv/bin/ruff check . && .venv/bin/ruff format .
 .venv/bin/pytest -q
 .venv/bin/pytest tests/test_pet_runtime.py::test_move_follow_path_snaps_state_to_end_and_broadcasts -v
