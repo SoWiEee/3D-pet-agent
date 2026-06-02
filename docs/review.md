@@ -295,8 +295,8 @@ GitHub Actions 環境 push 過。
 | ✅ **Exploration goal marker** | ~~導航成功有 target marker；探索 goal 沒有視覺目標~~ → 完成（kind 著色 beacon，goal 走 WS 廣播） | 重用 `TargetMarker` class，加 `kind: "exploration"` 樣式變體 |
 | **Eval replay UI** | 跑 dataset 只能看 markdown report | 加前端 "/eval" 路由，可逐 trial step through、播 controller_trace 動畫 |
 | **拖曳放物件** | 沒有 UI 編輯場景，只能 curl | 加「點地板放物件」+ class label 下拉，發 POST 到 `/perception/lifted` |
-| **Grounding explanation panel** | `goal.explanation` 只透過 speech bubble 短暫顯示 | 在 topbar 加「上一次推理」按鈕 → 彈窗顯示 parser intent + resolver score breakdown + planner status |
-| **Path failure overlay** | A\* 失敗只透過 speech 講；occupancy 為何 blocked 看不到 | 失敗時把目前的 `OccupancyGrid` overlay 自動打開 5 s |
+| ✅ **Grounding explanation panel** | ~~`goal.explanation` 只透過 speech bubble 短暫顯示~~ → 完成（commit `a010912`） | topbar「上一次推理」按鈕 → 彈窗顯示解析意圖＋每候選評分拆解堆疊條（resolver 現會輸出 `candidate_breakdowns`）＋planner status |
+| ✅ **Path failure overlay** | ~~A\* 失敗只透過 speech 講；occupancy 為何 blocked 看不到~~ → 完成（commit `a010912`） | 規劃失敗（plan_failed / no_path / goal_unreachable / start_blocked）時，自動 fetch `/planning/occupancy` 並把 blocked cells 以紅色地板貼圖顯示 5 s |
 
 ---
 
