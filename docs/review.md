@@ -153,7 +153,18 @@ IoU + class + 3D-distance 匹配。
 
 ---
 
-### B2. SemanticMap 自動載入
+### ✅ B2. SemanticMap 自動載入 — 完成（commit `32c5ab0`）
+
+`src/runtime/websocket_server.py::_try_autoload_semantic_map` 在 lifespan
+startup 從 `PET_AGENT_SEMANTIC_MAP_PATH`（預設 `runs/last_map.json`）載入
+快照、in-place 替換內容並廣播一次 `world_update`。`POST /semantic/save`
+端點觸發儲存（預設路徑、可帶 `path` 覆寫）。Corrupt / 缺檔 / load 例外 → silent
+fallback to clean boot。原 SemanticMap reference 不換，避免 perception_loop
+等模組失效。7 tests 全綠。
+
+---
+
+### B2. SemanticMap 自動載入（原始描述）
 
 **現狀：** `SemanticMap.save → load → save` byte-identical 已驗證，
 但 server boot 時不會自動載入上一輪 `runs/semantic_map_*.json`。
