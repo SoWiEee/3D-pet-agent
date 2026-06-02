@@ -12,7 +12,14 @@
 
 對應 `docs/spec.md` 已明文要求、但目前實作沒到位的部分。
 
-### A1. Live demo loop（高 CP 值）
+### ✅ A1. Live demo loop — 完成（commit `7bdfdb8`）
+
+`src/runtime/perception_loop.py` 已實作；`POST /perception/start /stop /status`
+端點上線；5 unit + 2 server smoke tests 全綠。Heavy 模型 lazy load，opt-in。
+
+---
+
+### A1. Live demo loop（高 CP 值，原始描述）
 
 **現狀：** `main.py --mode demo` 只啟動 FastAPI server，沒有 webcam →
 perception → tracker → SemanticMap → broadcast 的 2 Hz 背景迴圈。
@@ -33,7 +40,15 @@ http://127.0.0.1:8000/perception/lifted` 灌入預備好的 lifted JSON。
 
 ---
 
-### A2. LLM parser seam（中 CP 值）
+### ✅ A2. LLM parser seam — 完成（commit `b4e6b41`）
+
+`src/language/llm_parser.py::LLMCommandParser` 已實作；Anthropic SDK lazy import，
+client_factory 注入點讓測試免 API key。所有失敗路徑（import / network /
+timeout / schema validation）→ silent fallback to rule parser。10 tests 全綠。
+
+---
+
+### A2. LLM parser seam（中 CP 值，原始描述）
 
 **現狀：** `PET_AGENT_LLM_PARSER=on` 環境變數已預留，但 `src/language/
 command_parser.py::parse_command` 只走 `RuleCommandParser`。Rule parser
@@ -53,7 +68,19 @@ command_parser.py::parse_command` 只走 `RuleCommandParser`。Rule parser
 
 ---
 
-### A3. Phase 10 dataset 規模
+### ✅ A3. Phase 10 dataset 規模 — 完成
+
+`samples/eval_dataset.jsonl` 已從 8 trial 擴充到 **65 trial**，由
+`scripts/build_eval_dataset.py` 程式化生成。最新分佈：navigate 25 / clarification 13 /
+look_at 9 / no_match 7 / hide 6 / explore 2 / stop 2 / report 1。
+完整滿足 spec §13.3（50+ NL、10+ ambiguous、5 no-target）。
+
+最新 run：65 trials、task success rate **100%**、0 collisions、mean latency 4.3 ms。
+詳見 [docs/eval.md](eval.md)。
+
+---
+
+### A3. Phase 10 dataset 規模（原始描述）
 
 **現狀：** `samples/eval_dataset.jsonl` 只有 8 trial。Spec §13.3 規定：
 

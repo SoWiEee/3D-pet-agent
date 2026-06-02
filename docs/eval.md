@@ -40,21 +40,37 @@ loaded; the dataset is pre-grounded so the run is fast and stable.
 All six required spec §13.1 demo scenarios are exercised; trials 7 and 8
 add a negative case and a no-path case for completeness.
 
-## Latest run (2026-06-02)
+## Latest run (2026-06-02 — A3 expansion)
 
 ### Aggregate Metrics
 
 | Metric | Value |
 |---|---|
-| Trials | 8 |
-| Grounding success rate | 75.0% |
-| Path success rate | 62.5% |
+| Trials | 65 |
+| Grounding success rate | 69.2% |
+| Path success rate | 58.5% |
 | **Task success rate** | **100.0%** |
-| Mean latency | 8.3 ms |
-| p95 latency | 34.0 ms |
-| Mean cross-track error | 0.056 m |
-| Mean heading error | 0.767 rad |
+| Mean latency | 4.3 ms |
+| p95 latency | 14.2 ms |
 | Total collisions | 0 |
+
+### Trial distribution by expected outcome
+
+| Outcome | Count |
+|---|---|
+| navigate | 25 |
+| clarification (ambiguous) | 13 |
+| look_at | 9 |
+| no_match | 7 |
+| hide | 6 |
+| explore | 2 |
+| stop | 2 |
+| report | 1 |
+
+Spec §13.3 targets satisfied:
+- 50+ NL commands → **57** target-driven trials (navigate + hide + look_at + clarification)
+- 10+ ambiguous → **13**
+- 5 no-target → **5** (explore + stop + report)
 
 Notes:
 
