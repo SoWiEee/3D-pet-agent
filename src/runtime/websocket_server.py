@@ -126,6 +126,35 @@ exploration_planner = ExplorationPlanner()
 # newly discovered during the step.
 _last_exploration_ids: set[str] = set()
 
+# ── A1: live perception loop ───────────────────────────────────────────────
+# Held but **not started** at boot — heavy models only load when the user
+# POSTs /perception/start. Loop reuses the shared tracker + semantic_map +
+# scene_graph_builder so its broadcasts are indistinguishable from
+# /perception/lifted POSTs.
+# Bootstrap config — pulled here so we can pass cfg + prompts default.
+from ..config import AppConfig as _AppConfig  # noqa: E402
+from ..config import load_prompts as _load_prompts  # noqa: E402
+from .perception_loop import PerceptionLoop  # noqa: E402 — must follow tracker/map setup
+
+try:
+    _app_cfg = _AppConfig.load()
+except Exception as e:  # pragma: no cover — only on broken configs
+    log.warning("AppConfig.load failed (%s); perception loop will be unavailable", e)
+    _app_cfg = None  # type: ignore[assignment]
+
+perception_loop: PerceptionLoop | None = (
+    PerceptionLoop(
+        cfg=_app_cfg,
+        tracker=tracker,
+        semantic_map=semantic_map,
+        scene_graph_builder=scene_graph_builder,
+        broadcast=lambda action: runtime._broadcast(action),  # noqa: SLF001
+        markers_fn=lambda m: _map_to_markers(m),
+    )
+    if _app_cfg is not None
+    else None
+)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001
@@ -206,6 +235,54 @@ async def push_perception(payload: dict[str, Any]) -> dict[str, Any]:
     ]
     runtime.move_follow_path(path, speed=0.6)
     return {"applied": True, "target_label": label, "path_waypoints": len(path)}
+
+
+class PerceptionStartRequest(BaseModel):
+    prompts: list[str] | None = None
+    camera_index: int = 0
+    fov_deg: float = 60.0
+    hz: float | None = None
+
+
+@app.post("/perception/start")
+async def post_perception_start(req: PerceptionStartRequest) -> dict[str, Any]:
+    """A1 live perception loop — opens webcam, loads models, starts ticking.
+
+    Heavy models load **here** (not at server boot) so the demo can run
+    without GPU until the user opts in. Subsequent calls while running
+    return 409.
+    """
+    if perception_loop is None:
+        return {"started": False, "reason": "perception loop unavailable (config load failed)"}
+    if perception_loop.running:
+        return {"started": False, "reason": "already running", "status": perception_loop.status.__dict__}
+    prompts = req.prompts or _load_prompts()
+    try:
+        await perception_loop.start(
+            prompts=prompts,
+            camera_index=req.camera_index,
+            fov_deg=req.fov_deg,
+            hz=req.hz,
+        )
+    except Exception as e:  # noqa: BLE001
+        log.exception("failed to start perception loop")
+        return {"started": False, "reason": f"{type(e).__name__}: {e}"}
+    return {"started": True, "status": perception_loop.status.__dict__}
+
+
+@app.post("/perception/stop")
+async def post_perception_stop() -> dict[str, Any]:
+    if perception_loop is None or not perception_loop.running:
+        return {"stopped": False, "reason": "not running"}
+    await perception_loop.stop()
+    return {"stopped": True}
+
+
+@app.get("/perception/status")
+async def get_perception_status() -> dict[str, Any]:
+    if perception_loop is None:
+        return {"available": False}
+    return {"available": True, **perception_loop.status.__dict__}
 
 
 @app.post("/perception/lifted")

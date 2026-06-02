@@ -117,5 +117,10 @@ def test_broadcast_drops_oldest_on_slow_consumer():
             out.append(await q.get())
         return out
 
-    items = asyncio.get_event_loop().run_until_complete(drain())
+    # Use a fresh event loop so the test is isolated from other tests' loops.
+    loop = asyncio.new_event_loop()
+    try:
+        items = loop.run_until_complete(drain())
+    finally:
+        loop.close()
     assert items[-1].target_position_3d == (0.79, 0.0, 0.0)

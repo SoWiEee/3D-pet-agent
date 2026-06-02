@@ -43,6 +43,19 @@ def test_simulate_with_empty_path_handled_gracefully() -> None:
     assert resp.json()["status"] == "empty_path"
 
 
+def test_perception_status_endpoint_when_not_running() -> None:
+    c = _client()
+    body = c.get("/perception/status").json()
+    assert body["available"] is True
+    assert body["running"] is False
+
+
+def test_perception_stop_when_not_running() -> None:
+    c = _client()
+    body = c.post("/perception/stop").json()
+    assert body["stopped"] is False
+
+
 def test_last_trace_endpoint_starts_empty() -> None:
     c = _client()
     body = c.get("/control/last_trace").json()
