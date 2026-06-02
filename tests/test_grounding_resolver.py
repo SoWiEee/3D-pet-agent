@@ -99,7 +99,15 @@ def test_success_exposes_candidate_breakdowns(
     assert r.status == "success"
     assert r.candidate_breakdowns is not None and len(r.candidate_breakdowns) >= 1
     top = r.candidate_breakdowns[0]
-    for key in ("object_id", "total", "semantic", "attribute", "relation", "visibility", "feasibility"):
+    for key in (
+        "object_id",
+        "total",
+        "semantic",
+        "attribute",
+        "relation",
+        "visibility",
+        "feasibility",
+    ):
         assert key in top
     # The winning candidate's component-weighted total matches its reported total.
     from src.planning.grounding_resolver import GROUNDING_WEIGHTS
