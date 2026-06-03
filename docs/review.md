@@ -79,7 +79,6 @@ ruff-format 失敗，但尚未確認 cold-cache 環境下完整安裝步驟的 t
 
 | 項目 | 現狀 | 修補方向 |
 |---|---|---|
-| **拖曳放物件** | 沒有 UI 編輯場景，只能 curl 灌 `/perception/lifted` | 加「點地板放物件」+ class label 下拉，發 POST 到 `/perception/lifted` |
 | **Eval replay UI** | 跑 dataset 只能看 markdown report | 加前端 "/eval" 路由，可逐 trial step through、播 controller_trace 動畫 |
 
 ---
@@ -88,14 +87,17 @@ ruff-format 失敗，但尚未確認 cold-cache 環境下完整安裝步驟的 t
 
 **規格明文標示 optional，不阻塞 demo。** 暫時不做也沒關係。
 
-1. **Visual SLAM**（§14.1）— ORB-SLAM2/3 取代 `FixedPoseSource`，
-   把 `pose_source: fixed` → `pose_source: slam`，camera 移動時
-   world frame 仍穩定。
-2. **OpenScene research backend**（§14.2）— 第二感知 backend，
+1. **OpenScene research backend**（§14.2）— 第二感知 backend，
    讓 `source_backend ∈ {mainline_grounding_sam, openscene}` tag
    真的有第二個選項；附 backend comparison report。
-3. **RL exploration policy**（§14.3）— 取代 Phase 9 的啟發式評分。
-4. **ROS 2 Nav2 bridge**（§14.4）— Bridge 到真實機器人。
+2. **RL exploration policy**（§14.3）— 取代 Phase 9 的啟發式評分。
+3. **ROS 2 Nav2 bridge**（§14.4）— Bridge 到真實機器人。
+
+> ✅ **Visual SLAM**（§14.1）已實作 — `src/research/slam_adapter.py`
+> （ORB 視覺里程計，RGB-D PnP / 單目 essential，輸出 graphics-world
+> `world ← camera` pose）。`PET_AGENT_POSE_SOURCE=slam` 在 perception loop
+> 啟用。注意：frame-to-frame VO，無 loop closure / global BA，長迴圈會漂移；
+> 真正的 ORB-SLAM3 / DROID-SLAM 可沿 `VisualOdometry` protocol 替換。
 
 ---
 
@@ -103,12 +105,11 @@ ruff-format 失敗，但尚未確認 cold-cache 環境下完整安裝步驟的 t
 
 按 **CP 值 = (對 demo 影響) / (修補成本)** 排：
 
-1. **C 拖曳放物件** — 直接解決「只能 curl 擺場景」，互動可玩性最高
-2. **A4 Collision counting** — 重用既有函式、改善 eval 精度
-3. **A5 / B5** — 小儀器化 + 小 UX，順手可做
-4. **C Eval replay UI** — 拉高 demo 觀感
-5. **B6 CI cold-cache** — 觸發即知
-6. **D 系列** — 依預算與研究目標決定
+1. **A4 Collision counting** — 重用既有函式、改善 eval 精度
+2. **A5 / B5** — 小儀器化 + 小 UX，順手可做
+3. **C Eval replay UI** — 拉高 demo 觀感
+4. **B6 CI cold-cache** — 觸發即知
+5. **D 系列** — 依預算與研究目標決定
 
 ---
 

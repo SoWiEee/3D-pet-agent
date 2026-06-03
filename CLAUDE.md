@@ -71,9 +71,11 @@ Backend Python modules under `src/`:
 
 **Phase 10** added `src/evaluation/` (`schema`, `metrics`, `runner`, `report`) — `EvaluationRunner` loads `samples/eval_dataset.jsonl`, runs each trial through the in-process backend (parse → ground → plan → controller), writes JSONL + CSV + Markdown artifacts under `runs/eval_<ts>/`, and the CLI exits non-zero when task success rate drops below 50%. Latest run on the bundled 8-trial dataset: **8/8 trials task-successful (100%), mean latency 8.3 ms**. Canonical results in [`docs/eval.md`](docs/eval.md).
 
+**Optional sidecar (spec §14.1) — done:** `research/slam_adapter.py` ships the Visual SLAM pose source. `SLAMPoseSource` conforms to the `pose_source.py` `PoseSource` protocol (frames pushed via `track()`, pose read via `get()`) and publishes a `world ← camera` pose already in the graphics-world convention the lifter expects. Backbone is `OrbVisualOdometry` (OpenCV ORB features → RGB-D PnP when depth is supplied, else monocular essential matrix) — a pip-only, frame-to-frame VO stand-in for ORB-SLAM3 (no loop closure / global BA, so it drifts over long loops; a real ORB-SLAM3/DROID-SLAM binding drops in behind the `VisualOdometry` protocol). Enable with `PET_AGENT_POSE_SOURCE=slam`; the perception loop then pushes each webcam frame to the tracker before lifting. Default stays `fixed`.
+
 Planned-but-not-yet:
 
-- `research/` — `openscene_backend`, `slam_adapter`, `rl_explorer` (optional spec §14).
+- `research/` — `openscene_backend`, `rl_explorer` (optional spec §14.2 / §14.3).
 
 Frontend (`frontend/`) is Vue 3 + Vite + TypeScript + native Three.js (no React wrappers). `PetScene.ts` already implements `followPath(path[])` chaining tweens with heading lerp, so the controller can hand off paths without any frontend refactor.
 
