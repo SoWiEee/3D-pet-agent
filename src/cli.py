@@ -34,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
             "rl_exploration",
             "openscene_static",
             "compare_backends",
+            "ros_bridge",
         ],
     )
     # Common
@@ -368,6 +369,45 @@ def run_rl_exploration(args: argparse.Namespace, cfg: AppConfig) -> int:  # noqa
     return 0 if coverage_uplift(summary, "rl", "random") > 0 else 1
 
 
+def run_ros_bridge(args: argparse.Namespace, cfg: AppConfig) -> int:  # noqa: ARG001
+    """Optional §14.5 Stage A — demonstrate the Nav2 bridge offline (no live
+    ROS graph needed). Publishes a sample goal through a RecordingTransport and
+    integrates a synthetic ``/cmd_vel`` stream into a world trajectory.
+
+    With a real ROS 2 install, swap ``RecordingTransport`` for
+    ``RclpyTransport`` to drive an actual base; that path needs hardware so it
+    is not exercised here.
+    """
+    import itertools
+
+    from .planning.schema import NavigationGoal
+    from .research.ros_bridge import Nav2Bridge, RecordingTransport
+
+    transport = RecordingTransport()
+    # Deterministic monotonic clock at fixed dt so the demo is reproducible.
+    ticks = itertools.count(0.0, 0.1)
+    bridge = Nav2Bridge(transport, clock=lambda: next(ticks))
+
+    goal = NavigationGoal(
+        goal_id="demo_goal",
+        target_position_world=(1.0, 0.0, 2.0),
+        source_command="go to the cup",
+        explanation="demo: bridge a pose goal to /goal_pose",
+    )
+    pose = bridge.send_goal(goal)
+    log.info("published goal_pose (frame=%s): %s", pose["header"]["frame_id"], pose["pose"])
+
+    # Drive forward while turning left for 10 steps, then read the trajectory.
+    for _ in range(10):
+        transport.feed_cmd_vel((0.4, 0.3))
+    x, y_up, z = bridge.state.x, 0.0, bridge.state.y
+    log.info(
+        "after 10 cmd_vel steps: world=(%.3f, %.1f, %.3f) yaw=%.3f", x, y_up, z, bridge.state.theta
+    )
+    log.info("goals published: %d", len(transport.published_goals))
+    return 0
+
+
 def run_not_implemented(mode: str) -> int:
     log.error("mode %r is scaffolded but not implemented in Phase 1–2", mode)
     return 3
@@ -397,6 +437,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_replay(args, cfg)
     if args.mode == "rl_exploration":
         return run_rl_exploration(args, cfg)
+    if args.mode == "ros_bridge":
+        return run_ros_bridge(args, cfg)
     return run_not_implemented(args.mode)
 
 

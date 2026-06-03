@@ -1004,6 +1004,62 @@ if time-bound.
 - Subscribe to `/cmd_vel` and animate the cat from the Twist stream.
 - Intended for a follow-up physical-robot demo, **not** the virtual-pet
   deliverable.
+- **Superseded in scope by §14.5 Stage A**, which implements this bridge as
+  the first step of the mobile-manipulator track.
+
+### 14.5 Mobile Manipulator Extension (optional research track)
+
+Re-targets the virtual-pet stack onto a real **mobile manipulator** =
+differential-drive base + robotic arm. The perception → semantic map →
+grounding → planning → control spine is reused unchanged; only the actuation
+sink (Three.js cat) and a new manipulation branch are added. This is an
+**optional** research track and must not block the mainline demo.
+
+**Coordinate handshake.** The mainline runs in the **graphics-world** frame
+(X right, Y up, Z back; ground plane XZ; the unicycle model parameterises the
+ground as `(x, y_kin) = (world_x, world_z)` with `θ` CCW from +X toward +Z).
+ROS uses **REP-103** (X forward, Y left, Z up). The bridge maps the ground
+plane by planar identity `(rx, ry) = (world_x, world_z)`, `yaw = θ`, `z = 0`
+— rotation-direction-preserving so `ω > 0` (CCW) stays `angular.z > 0`. All
+ROS ↔ graphics conversion lives in one module so the rest of the stack never
+sees a ROS type.
+
+**Stages (cut from the back; never cut Stage A while on this track):**
+
+- **Stage A — Nav2 bridge / semantic nav on a real base** _(implemented:
+  `src/research/ros_bridge.py`)_. `Nav2Bridge` converts each `NavigationGoal`
+  to a `geometry_msgs/PoseStamped`-shaped goal (frame `map`) published on
+  `/goal_pose`, and integrates the incoming `/cmd_vel` Twist stream
+  (`linear.x`, `angular.z`) back into a world pose for the renderer / pet
+  runtime. Transport is behind a `RosTransport` protocol: a `RecordingTransport`
+  drives the tests without ROS installed; an `RclpyTransport` (lazy `rclpy`
+  import) drops in for the live graph. Our global A* may either feed Nav2 as a
+  goal source or be deferred to Nav2's own global+local planners — the bridge
+  only commits to the goal/cmd_vel contract.
+- **Stage B — real SLAM + sensors.** Replace ORB-VO (§14.1) with ORB-SLAM3 /
+  Nav2 AMCL on a real LiDAR / RGB-D for drift-free localisation and a metric
+  occupancy layer beneath the existing semantic layer.
+- **Stage C — arm + MoveIt2.** Add a `ManipulationAction` actuation contract
+  and a MoveIt2 backend for collision-aware IK + gripper control; first target
+  is placement / pick at a *known* object pose from the SemanticMap.
+- **Stage D — grasp synthesis.** Feed the per-object point cloud (densified
+  depth, not the median-depth lift) into a 6-DoF grasp net (GraspNet /
+  Contact-GraspNet / AnyGrasp) to compute grasp poses automatically.
+
+**New contracts (Stage C+, specified ahead so call sites are stable):**
+
+- `GraspGoal`: `{ grasp_id, target_object_id, grasp_pose_world (position +
+  quaternion), approach_vector_world, gripper_width, confidence, explanation
+  }` — the manipulation analogue of `NavigationGoal`, also explainable.
+- `ManipulationAction`: `{ action ∈ {reach, grasp, lift, place, retract},
+  target_pose_world, gripper, speed }` — the manipulation analogue of
+  `PetAction`, consumed by the MoveIt2 backend (Stage C).
+
+**Acceptance (Stage A):** a recorded `NavigationGoal` round-trips to a
+frame-correct goal pose, and a synthetic `/cmd_vel` stream integrates to the
+expected world trajectory (CCW command ⇒ CCW yaw), all without a live ROS
+graph. Later stages are validated on hardware / simulation and are explicitly
+allowed to remain incomplete.
 
 ---
 
