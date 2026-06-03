@@ -1060,9 +1060,18 @@ sees a ROS type.
   `ManipulationBackend` (`RecordingBackend` for tests). **Still TODO:** the
   live `MoveItBackend` (collision-aware IK + gripper execution) needs real
   ROS 2 + MoveIt2 hardware, so it is a lazy-imported stub.
-- **Stage D — grasp synthesis.** Feed the per-object point cloud (densified
-  depth, not the median-depth lift) into a 6-DoF grasp net (GraspNet /
-  Contact-GraspNet / AnyGrasp) to compute grasp poses automatically.
+- **Stage D — grasp synthesis** _(analytic sampler implemented:
+  `src/research/grasp_net.py`)_. Synthesises a 6-DoF grasp from the object
+  **point cloud** instead of Stage C's box approximation: `AnalyticGraspSampler`
+  takes PCA principal axes, closes the gripper along the thinnest axis,
+  approaches from the most top-down perpendicular direction, and ranks
+  candidates on gripper fit + top-down stability + centredness — emitting the
+  same Stage-C `GraspGoal`s so `plan_pick_and_place` consumes them unchanged.
+  `points_from_depth` back-projects masked depth to the densified cloud;
+  `box_/cylinder_point_cloud` are test fixtures. **Still TODO:** the learned
+  `ContactGraspNetSynthesizer` (GraspNet / Contact-GraspNet / AnyGrasp) behind
+  the `GraspSynthesizer` protocol — needs the trained CUDA model, so it is a
+  lazy stub; the analytic sampler is the pip-only stand-in.
 
 **New contracts (Stage C+, implemented in `src/research/manipulation.py`):**
 
