@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import heapq
 import math
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Literal
 
@@ -112,9 +113,8 @@ def _reconstruct(came_from: dict[Cell, Cell], end: Cell) -> list[Cell]:
 
 
 # ── path smoothing helpers ─────────────────────────────────────────────────
-def line_of_sight(grid: OccupancyGrid, a: Cell, b: Cell) -> bool:
-    """Bresenham line check — return True if every cell from ``a`` to ``b``
-    is free. Used by LOS pruning in :func:`smooth_path`."""
+def iter_line_cells(a: Cell, b: Cell) -> Iterator[Cell]:
+    """Yield every grid cell on the Bresenham line from ``a`` to ``b`` inclusive."""
     x0, y0 = a
     x1, y1 = b
     dx = abs(x1 - x0)
@@ -124,10 +124,9 @@ def line_of_sight(grid: OccupancyGrid, a: Cell, b: Cell) -> bool:
     err = dx - dy
     x, y = x0, y0
     while True:
-        if not grid.is_free(x, y):
-            return False
+        yield (x, y)
         if x == x1 and y == y1:
-            return True
+            return
         e2 = 2 * err
         if e2 > -dy:
             err -= dy
@@ -135,6 +134,31 @@ def line_of_sight(grid: OccupancyGrid, a: Cell, b: Cell) -> bool:
         if e2 < dx:
             err += dx
             y += sy
+
+
+def line_of_sight(grid: OccupancyGrid, a: Cell, b: Cell) -> bool:
+    """Bresenham line check — return True if every cell from ``a`` to ``b``
+    is free. Used by LOS pruning in :func:`smooth_path`."""
+    return all(grid.is_free(x, y) for x, y in iter_line_cells(a, b))
+
+
+def count_path_collisions(grid: OccupancyGrid, cells: list[Cell]) -> int:
+    """Count the distinct blocked cells a polyline through ``cells`` crosses.
+
+    Walks the Bresenham line of every segment, so an obstacle in the *middle*
+    of a long segment is caught — unlike endpoint sampling, which only checks
+    waypoints and misses mid-segment hits. Each blocked cell is counted once
+    even when several segments share it (e.g. a turn waypoint)."""
+    if not cells:
+        return 0
+    if len(cells) == 1:
+        return 1 if grid.is_blocked(*cells[0]) else 0
+    blocked: set[Cell] = set()
+    for a, b in zip(cells, cells[1:], strict=False):  # adjacent pairs (n-1 of them)
+        for cell in iter_line_cells(a, b):
+            if grid.is_blocked(*cell):
+                blocked.add(cell)
+    return len(blocked)
 
 
 def smooth_path(grid: OccupancyGrid, path: list[Cell]) -> list[Cell]:

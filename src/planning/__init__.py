@@ -1,6 +1,6 @@
 """Planning: grounding, occupancy grid, A* (spec §9–§10)."""
 
-from .astar import AStarResult, astar, smooth_path
+from .astar import AStarResult, astar, count_path_collisions, smooth_path
 from .grounding_resolver import GROUNDING_WEIGHTS, GroundingResolver, GroundingResult
 from .occupancy_grid import GridConfig, OccupancyGrid, build_occupancy_grid
 from .planner import Planner, PlannerConfig, PlannerResult
@@ -17,6 +17,7 @@ __all__ = [
     "build_occupancy_grid",
     "AStarResult",
     "astar",
+    "count_path_collisions",
     "smooth_path",
     "Planner",
     "PlannerConfig",

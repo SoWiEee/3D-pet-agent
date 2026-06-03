@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from src.planning import GridConfig, OccupancyGrid, astar, smooth_path
+from src.planning import (
+    GridConfig,
+    OccupancyGrid,
+    astar,
+    count_path_collisions,
+    smooth_path,
+)
+from src.planning.astar import iter_line_cells
 
 
 def _empty_grid(w: int = 20, h: int = 20) -> OccupancyGrid:
@@ -100,3 +107,39 @@ def test_smooth_path_respects_obstacle_blocking_los() -> None:
     smoothed = smooth_path(grid, raw)
     # The middle waypoint stays because LOS from start → end is broken.
     assert (5, 0) in smoothed
+
+
+# ── A4: segment-wise collision counting ──────────────────────────────────────
+def test_iter_line_cells_includes_endpoints_and_interior() -> None:
+    cells = list(iter_line_cells((0, 0), (3, 0)))
+    assert cells == [(0, 0), (1, 0), (2, 0), (3, 0)]
+
+
+def test_count_path_collisions_catches_mid_segment_obstacle() -> None:
+    # Two free endpoints with an obstacle dead-centre between them. Endpoint
+    # sampling would report 0; the Bresenham walk must report 1.
+    grid = _empty_grid()
+    grid.data[0, 5] = 1  # blocked cell at (gx=5, gz=0), mid-way on the segment
+    path = [(0, 0), (10, 0)]
+    assert grid.is_free(*path[0]) and grid.is_free(*path[1])
+    assert count_path_collisions(grid, path) == 1
+
+
+def test_count_path_collisions_counts_shared_turn_cell_once() -> None:
+    grid = _empty_grid()
+    grid.data[5, 5] = 1  # the corner cell shared by both segments
+    path = [(5, 0), (5, 5), (10, 5)]  # bends through the blocked corner
+    assert count_path_collisions(grid, path) == 1
+
+
+def test_count_path_collisions_zero_on_clear_path() -> None:
+    grid = _empty_grid()
+    assert count_path_collisions(grid, [(0, 0), (9, 9), (0, 9)]) == 0
+
+
+def test_count_path_collisions_single_and_empty() -> None:
+    grid = _empty_grid()
+    grid.data[3, 3] = 1
+    assert count_path_collisions(grid, []) == 0
+    assert count_path_collisions(grid, [(3, 3)]) == 1
+    assert count_path_collisions(grid, [(0, 0)]) == 0

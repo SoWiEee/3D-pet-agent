@@ -25,7 +25,7 @@ from typing import Any
 from ..control import PathFollower, PIDController, PurePursuitController, UnicycleState
 from ..exploration import CoverageGrid, ExplorationPlanner
 from ..language import parse_command
-from ..planning import GroundingResolver, Planner
+from ..planning import GroundingResolver, Planner, count_path_collisions
 from ..planning.occupancy_grid import build_occupancy_grid
 from ..spatial import SceneGraphBuilder, SemanticMap
 from ..spatial.object_lifter import ObjectConfidence, ObjectState3D
@@ -208,15 +208,16 @@ class EvaluationRunner:
     def _count_collisions(
         self, path: list[tuple[float, float, float]], smap: SemanticMap, goal: Any
     ) -> int:
-        """Count waypoints that sit inside a non-target obstacle cell."""
+        """Count distinct obstacle cells the path crosses.
+
+        Uses segment-wise Bresenham (``count_path_collisions``) so an obstacle
+        in the middle of a long straight segment is caught — endpoint sampling
+        only checked waypoints and missed mid-segment hits.
+        """
         excluded = {goal.target_object_id} if goal.target_object_id else set()
         grid = build_occupancy_grid(smap, cfg=self.planner.cfg.grid, exclude_object_ids=excluded)
-        hits = 0
-        for x, _, z in path:
-            cell = grid.world_to_cell(x, z)
-            if grid.is_blocked(*cell):
-                hits += 1
-        return hits
+        cells = [grid.world_to_cell(x, z) for x, _, z in path]
+        return count_path_collisions(grid, cells)
 
     # ── batch ─────────────────────────────────────────────────────────────
     def run_dataset(self, entries: list[DatasetEntry]) -> list[EvaluationRecord]:
