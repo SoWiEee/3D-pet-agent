@@ -60,14 +60,20 @@ ruff-format 失敗，但尚未確認 cold-cache 環境下完整安裝步驟的 t
 1. **OpenScene research backend**（§14.2）— 第二感知 backend，
    讓 `source_backend ∈ {mainline_grounding_sam, openscene}` tag
    真的有第二個選項；附 backend comparison report。
-2. **RL exploration policy**（§14.3）— 取代 Phase 9 的啟發式評分。
-3. **ROS 2 Nav2 bridge**（§14.4）— Bridge 到真實機器人。
+2. **ROS 2 Nav2 bridge**（§14.4）— Bridge 到真實機器人。
 
 > ✅ **Visual SLAM**（§14.1）已實作 — `src/research/slam_adapter.py`
 > （ORB 視覺里程計，RGB-D PnP / 單目 essential，輸出 graphics-world
 > `world ← camera` pose）。`PET_AGENT_POSE_SOURCE=slam` 在 perception loop
 > 啟用。注意：frame-to-frame VO，無 loop closure / global BA，長迴圈會漂移；
 > 真正的 ORB-SLAM3 / DROID-SLAM 可沿 `VisualOdometry` protocol 替換。
+>
+> ✅ **RL exploration policy**（§14.3）已實作 — `src/research/rl/`
+> （DQN，pure-PyTorch，建在現有 `CoverageGrid` + `OccupancyGrid` 上）。
+> `python main.py --mode rl_exploration` 訓練 + A/B + 寫 `runs/` artifact。
+> 結果：RL cov ≈ 0.53 vs heuristic ≈ 0.38（+37.9%）/ random ≈ 0.36
+> （+47.3%），達 spec ≥10% 驗收。`format_ab_report` 會在 uplift <10% 時
+> 誠實標示 inconclusive。
 
 ---
 

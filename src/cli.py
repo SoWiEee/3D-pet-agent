@@ -31,6 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
             "replay",
             "record",
             "eval",
+            "rl_exploration",
             "openscene_static",
             "compare_backends",
         ],
@@ -82,6 +83,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--commands",
         type=Path,
         help="JSONL of pre-grounded commands for --mode replay",
+    )
+    # RL exploration (spec §14.3)
+    p.add_argument(
+        "--episodes",
+        type=int,
+        default=500,
+        help="--mode rl_exploration: DQN training episodes",
+    )
+    p.add_argument(
+        "--scenes",
+        type=int,
+        default=50,
+        help="--mode rl_exploration: A/B evaluation scenes",
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="--mode rl_exploration: training seed",
     )
     return p
 
@@ -291,6 +311,63 @@ def run_replay(args: argparse.Namespace, cfg: AppConfig) -> int:
     return run_eval(args, cfg)
 
 
+def run_rl_exploration(args: argparse.Namespace, cfg: AppConfig) -> int:  # noqa: ARG001
+    """Optional §14.3 — train a DQN exploration policy, A/B it against the
+    heuristic + random baselines, and write a report. Returns non-zero only if
+    the trained policy fails to beat *random* (a basic sanity gate; beating the
+    heuristic is allowed to be inconclusive per spec)."""
+    import json
+
+    import numpy as np
+
+    from .research.rl import (
+        RLExplorationPolicy,
+        coverage_uplift,
+        evaluate_ab,
+        format_ab_report,
+        heuristic_policy,
+        random_policy,
+        train_dqn,
+    )
+
+    log.info("training DQN: episodes=%d seed=%d", args.episodes, args.seed)
+    agent, history = train_dqn(episodes=args.episodes, seed=args.seed)
+    log.info(
+        "training done: return first20=%.2f last20=%.2f",
+        float(np.mean(history[:20])),
+        float(np.mean(history[-20:])),
+    )
+
+    policies = {
+        "rl": RLExplorationPolicy(agent),
+        "heuristic": heuristic_policy,
+        "random": random_policy(np.random.default_rng(args.seed + 7)),
+    }
+    summary = evaluate_ab(policies, n_scenes=args.scenes, seed0=20_000)
+
+    out_dir = args.out / f"rl_exploration_{int(time.time())}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    agent.save(str(out_dir / "model.pt"))
+    report = format_ab_report(summary, n_scenes=args.scenes, episodes=args.episodes)
+    (out_dir / "report.md").write_text(report, encoding="utf-8")
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    log.info("wrote model + report under %s", out_dir)
+    for name, m in summary.items():
+        log.info(
+            "  %-9s coverage=%.3f recall=%.2f return=%+.2f",
+            name,
+            m["mean_coverage"],
+            m["recall"],
+            m["mean_return"],
+        )
+    log.info(
+        "coverage uplift RL vs heuristic: %+.1f%%",
+        100 * coverage_uplift(summary, "rl", "heuristic"),
+    )
+    # Sanity gate: a trained policy must at least beat random exploration.
+    return 0 if coverage_uplift(summary, "rl", "random") > 0 else 1
+
+
 def run_not_implemented(mode: str) -> int:
     log.error("mode %r is scaffolded but not implemented in Phase 1–2", mode)
     return 3
@@ -318,6 +395,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_eval(args, cfg)
     if args.mode == "replay":
         return run_replay(args, cfg)
+    if args.mode == "rl_exploration":
+        return run_rl_exploration(args, cfg)
     return run_not_implemented(args.mode)
 
 

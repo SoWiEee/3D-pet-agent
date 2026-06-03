@@ -967,19 +967,36 @@ if time-bound.
   exports a comparison table.
 - Acceptance: At least 5 queries succeed and visualize.
 
-### 14.3 RL-Based Exploration Policy (course § RL I/II)
+### 14.3 RL-Based Exploration Policy (course § RL I/II) — **done**
 
-- `research/rl_explorer.py`.
-- State: known object count, unknown area ratio, target visible flag,
-  distance to nearest frontier, semantic uncertainty.
+- `research/rl_explorer.py` is a thin spec-named facade re-exporting the
+  `src/research/rl/` package (`env.py`, `dqn.py`, `policy.py`).
+- State (5-dim, all normalized to `[0,1]`): known object count, unknown area
+  ratio, target visible flag, distance to nearest frontier, semantic
+  uncertainty.
 - Actions: `inspect_frontier`, `move_to_known_object`, `look_around`,
   `ask_user`, `return_to_user`.
 - Reward: `+1.0` discovered relevant object, `+0.5` reduced unknown area,
   `+0.3` verified stale object, `−0.2` unnecessary movement, `−1.0`
   collision, `−0.5` repeated failed inspection.
-- Training: offline replay first; baseline = heuristic exploration of §12.
+- **Algorithm: DQN** (pure-PyTorch `QNetwork` 5→64→64→5, replay buffer,
+  soft-updated target network, ε-greedy, Huber loss, grad clip). No
+  gymnasium / SB3 dependency — `ExplorationEnv` is built directly on the
+  existing `CoverageGrid` + `OccupancyGrid` so it shares the production
+  observation model. `_move_toward` slides to the last free cell before an
+  obstacle (no freeze-on-blocked-frontier trap).
+- Training: episodic on procedurally-seeded scenes; baseline = heuristic
+  exploration of §12 + random policy. A/B harness (`evaluate_ab`) replays
+  identical seeds across policies; `format_ab_report` honestly prints
+  "inconclusive" when uplift < 10%.
+- CLI: `--mode rl_exploration [--episodes N --scenes M --seed S]` trains,
+  runs the A/B, and writes `model.pt` + `report.md` + `summary.json` under
+  `runs/`; exits non-zero only if RL fails to beat random.
 - Acceptance: RL beats heuristic on coverage by ≥ 10% over 50 trials, OR
   the experiment is honestly reported as inconclusive.
+- **Result:** RL cov ≈ 0.53 vs heuristic ≈ 0.38 (**+37.9%**) / random ≈ 0.36
+  (**+47.3%**); training return climbs ≈ 0.49 → 1.88. Acceptance met.
+  Reproduce with `python main.py --mode rl_exploration`.
 
 ### 14.4 ROS 2 Nav2 Bridge (course § Nav stack)
 
