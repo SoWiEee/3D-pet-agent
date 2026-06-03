@@ -1049,14 +1049,22 @@ sees a ROS type.
   `RangeScan` instead. **Still TODO:** swap ORB-VO (§14.1) for ORB-SLAM3 /
   Nav2 AMCL for drift-free *localisation* — the metric mapping half is done,
   the SLAM-grade pose half is not.
-- **Stage C — arm + MoveIt2.** Add a `ManipulationAction` actuation contract
-  and a MoveIt2 backend for collision-aware IK + gripper control; first target
-  is placement / pick at a *known* object pose from the SemanticMap.
+- **Stage C — arm + MoveIt2** _(planning implemented:
+  `src/research/manipulation.py`)_. The manipulation pipeline mirrors the
+  navigation one: `top_down_grasp_goal` synthesises an explainable `GraspGoal`
+  from a known SemanticMap object (top-down approach, gripper closes along the
+  shorter horizontal axis, confidence folds in detection quality +
+  reachability + gripper fit); `plan_pick_and_place` sequences the
+  `ManipulationAction` primitives (reach → grasp → lift → reach → place →
+  retract); `Manipulator` gates on feasibility and drives a
+  `ManipulationBackend` (`RecordingBackend` for tests). **Still TODO:** the
+  live `MoveItBackend` (collision-aware IK + gripper execution) needs real
+  ROS 2 + MoveIt2 hardware, so it is a lazy-imported stub.
 - **Stage D — grasp synthesis.** Feed the per-object point cloud (densified
   depth, not the median-depth lift) into a 6-DoF grasp net (GraspNet /
   Contact-GraspNet / AnyGrasp) to compute grasp poses automatically.
 
-**New contracts (Stage C+, specified ahead so call sites are stable):**
+**New contracts (Stage C+, implemented in `src/research/manipulation.py`):**
 
 - `GraspGoal`: `{ grasp_id, target_object_id, grasp_pose_world (position +
   quaternion), approach_vector_world, gripper_width, confidence, explanation
