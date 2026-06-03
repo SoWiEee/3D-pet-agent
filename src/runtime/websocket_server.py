@@ -21,11 +21,12 @@ import json
 import logging
 import math
 import os
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -51,7 +52,7 @@ from ..planning import (
     PlannerConfig,
 )
 from ..spatial import SceneGraphBuilder, SemanticMap
-from ..spatial.object_lifter import ObjectState3D
+from ..spatial.object_lifter import ObjectConfidence, ObjectState3D
 from ..tracking import Tracker
 from .pet_runtime import PetAction, PetRuntime
 
@@ -440,6 +441,86 @@ async def reset_semantic_map() -> dict[str, Any]:
         PetAction(action="world_update", world_objects=[], scene_graph=None)
     )
     return {"reset": True}
+
+
+# ── scene editor (manual object placement) ────────────────────────────────────
+# Rough real-world extents (metres) so a manually-placed marker is drawn at a
+# believable size. Unknown labels fall back to a small cube.
+_EDITOR_DEFAULT_EXTENTS: dict[str, tuple[float, float, float]] = {
+    "cup": (0.08, 0.10, 0.08),
+    "bottle": (0.07, 0.24, 0.07),
+    "bowl": (0.16, 0.08, 0.16),
+    "book": (0.20, 0.03, 0.15),
+    "laptop": (0.33, 0.02, 0.23),
+    "keyboard": (0.44, 0.03, 0.13),
+    "ball": (0.12, 0.12, 0.12),
+    "lamp": (0.30, 0.45, 0.30),
+    "potted plant": (0.40, 1.10, 0.40),
+    "chair": (0.50, 0.90, 0.50),
+    "table": (1.20, 0.05, 0.80),
+    "box": (0.30, 0.30, 0.30),
+}
+_EDITOR_FALLBACK_EXTENT: tuple[float, float, float] = (0.20, 0.20, 0.20)
+
+
+class EditorObjectRequest(BaseModel):
+    class_label: str
+    x: float
+    z: float
+    y: float | None = None
+    extent: tuple[float, float, float] | None = None
+
+
+@app.post("/editor/object")
+async def editor_place_object(req: EditorObjectRequest) -> dict[str, Any]:
+    """Scene-editor placement: drop one manually-authored object into the
+    SemanticMap at world (x, z) and broadcast the updated scene.
+
+    Re-feeds the existing objects at the *same* frame so the decay step in
+    ``SemanticMap.update`` doesn't age them out — only the new object is added.
+    """
+    label = req.class_label.strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="class_label must be non-empty")
+    if not (math.isfinite(req.x) and math.isfinite(req.z)):
+        raise HTTPException(status_code=400, detail="x and z must be finite")
+
+    extent = (
+        tuple(req.extent)
+        if req.extent
+        else _EDITOR_DEFAULT_EXTENTS.get(label, _EDITOR_FALLBACK_EXTENT)
+    )
+    # Rest the object on the floor unless the caller pins y explicitly.
+    y = req.y if req.y is not None else extent[1] / 2.0
+    frame = max(0, semantic_map.last_frame_id)
+    obj = ObjectState3D(
+        object_id=f"editor_{uuid.uuid4().hex[:8]}",
+        class_label=label,
+        bbox_xyxy=(0.0, 0.0, 0.0, 0.0),
+        center_2d=(0.0, 0.0),
+        center_3d_world=(float(req.x), float(y), float(req.z)),
+        extent_3d=extent,
+        median_depth=float(abs(req.z)) or 1.0,
+        depth_uncertainty=0.05,
+        confidence=ObjectConfidence(
+            detector=0.9, mask_quality=0.9, depth_quality=0.9, tracking=1.0, overall=0.9
+        ),
+        last_seen_frame=frame,
+        tracking_status="tracked",
+    )
+    semantic_map.update([*semantic_map.values(), obj], frame)
+    _broadcast_world_update(frame)
+    return {"placed": True, "object_id": obj.object_id, "map_size": len(semantic_map.values())}
+
+
+@app.delete("/editor/object/{object_id}")
+async def editor_delete_object(object_id: str) -> dict[str, Any]:
+    """Remove a single authored object (editor undo / delete)."""
+    if not semantic_map.remove(object_id):
+        raise HTTPException(status_code=404, detail=f"no object {object_id!r}")
+    frame = semantic_map.last_frame_id if semantic_map.last_frame_id >= 0 else None
+    _broadcast_world_update(frame)
+    return {"removed": True, "object_id": object_id, "map_size": len(semantic_map.values())}
 
 
 class CommandRequest(BaseModel):
@@ -832,6 +913,24 @@ def _map_to_markers(m: SemanticMap) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _broadcast_world_update(frame_id: int | None = None) -> None:
+    """Rebuild markers + scene graph from the current SemanticMap and broadcast
+    a ``world_update`` so every connected client redraws the scene."""
+    markers = _map_to_markers(semantic_map)
+    graph = (
+        scene_graph_builder.build(semantic_map, frame_id=frame_id)
+        if frame_id is not None
+        else scene_graph_builder.build(semantic_map)
+    )
+    runtime._broadcast(  # noqa: SLF001
+        PetAction(
+            action="world_update",
+            world_objects=markers,
+            scene_graph=graph.to_dict(),
+        )
+    )
 
 
 @app.websocket("/ws/pet")

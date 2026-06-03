@@ -98,6 +98,18 @@ def test_reset_clears_objects() -> None:
     assert m.last_frame_id == -1
 
 
+def test_remove_drops_single_object_and_reports_existence() -> None:
+    m = SemanticMap()
+    m.update(
+        [_obs(object_id="t1", frame_id=0), _obs(object_id="t2", frame_id=0)],
+        frame_id=0,
+    )
+    assert m.remove("t1") is True
+    assert "t1" not in m.objects
+    assert "t2" in m.objects  # other objects untouched
+    assert m.remove("t1") is False  # already gone
+
+
 def test_object_leaving_view_remains_with_decayed_confidence() -> None:
     """Acceptance §7.2: an object that leaves view stays in the map with
     decayed confidence (not just dropped immediately)."""

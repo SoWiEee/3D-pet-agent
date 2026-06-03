@@ -95,6 +95,18 @@ class SemanticMap:
     def get(self, object_id: str) -> ObjectState3D | None:
         return self._objects.get(object_id)
 
+    def remove(self, object_id: str) -> bool:
+        """Drop a single object by id. Returns True if it existed.
+
+        Used by the scene editor (manual placement) to delete one authored
+        object without resetting the whole map or running a decay step.
+        """
+        if object_id in self._objects:
+            del self._objects[object_id]
+            self.last_updated = time.time()
+            return True
+        return False
+
     def values(self) -> list[ObjectState3D]:
         # Sorted by object_id for deterministic output.
         return [self._objects[k] for k in sorted(self._objects)]

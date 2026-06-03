@@ -44,6 +44,14 @@ export class PetScene {
   private raf = 0;
   private resizeObserver?: ResizeObserver;
 
+  // Scene-editor placement (manual object authoring). When on, a left click
+  // that doesn't drag raycasts the floor plane and reports world (x, z).
+  private editorMode = false;
+  private onFloorClick: ((x: number, z: number) => void) | null = null;
+  private raycaster = new THREE.Raycaster();
+  private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  private pointerMoveDist = 0;
+
   // Custom drag controls — left button pans, right button orbits. We track
   // the camera as an offset from `cameraTarget` so panning and orbiting
   // share the same anchor: pan moves the target along the camera's right /
@@ -319,6 +327,27 @@ export class PetScene {
     this.explorationGoal.clear();
   }
 
+  /** Toggle scene-editor placement. While on, a non-drag left click raycasts
+   *  the floor and reports world (x, z) via `onFloorClick`; camera orbit
+   *  (right drag) and zoom (wheel) keep working, and left-drag still pans. */
+  setEditorMode(on: boolean, onFloorClick?: (x: number, z: number) => void) {
+    this.editorMode = on;
+    this.onFloorClick = on ? (onFloorClick ?? null) : null;
+    this.renderer.domElement.style.cursor = on ? "crosshair" : "";
+  }
+
+  /** Raycast a viewport pixel onto the y=0 floor plane → world point, or null. */
+  private raycastFloor(clientX: number, clientY: number): THREE.Vector3 | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hit = new THREE.Vector3();
+    return this.raycaster.ray.intersectPlane(this.groundPlane, hit) ? hit : null;
+  }
+
   // ── camera drag controls ──────────────────────────────────────────────
   /** Wire pointer / contextmenu / wheel listeners on the canvas. Left button
    *  pans the look-at target; right button orbits around it. Wheel zooms
@@ -347,6 +376,7 @@ export class PetScene {
     if (e.button === 0) this.activeDrag = "pan";
     else if (e.button === 2) this.activeDrag = "orbit";
     else return;
+    this.pointerMoveDist = 0;
     this.lastPointer = { x: e.clientX, y: e.clientY };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     e.preventDefault();
@@ -357,17 +387,25 @@ export class PetScene {
     const dx = e.clientX - this.lastPointer.x;
     const dy = e.clientY - this.lastPointer.y;
     this.lastPointer = { x: e.clientX, y: e.clientY };
+    this.pointerMoveDist += Math.abs(dx) + Math.abs(dy);
     if (this.activeDrag === "pan") this.pan(dx, dy);
     else this.orbit(dx, dy);
   };
 
   private onPointerEnd = (e: PointerEvent) => {
     if (!this.activeDrag) return;
+    // A left press that barely moved is a click, not a pan — in editor mode
+    // that drops an object on the floor under the cursor.
+    const wasClick = this.activeDrag === "pan" && this.pointerMoveDist < 6;
     this.activeDrag = null;
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {
       // ignore — pointer may already have been released
+    }
+    if (this.editorMode && wasClick && e.type === "pointerup" && this.onFloorClick) {
+      const hit = this.raycastFloor(e.clientX, e.clientY);
+      if (hit) this.onFloorClick(hit.x, hit.z);
     }
   };
 

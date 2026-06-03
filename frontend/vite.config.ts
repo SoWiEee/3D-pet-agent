@@ -11,6 +11,7 @@ export default defineConfig({
       "/semantic": { target: "http://127.0.0.1:8000", changeOrigin: true },
       "/scene": { target: "http://127.0.0.1:8000", changeOrigin: true },
       "/command": { target: "http://127.0.0.1:8000", changeOrigin: true },
+      "/editor": { target: "http://127.0.0.1:8000", changeOrigin: true },
       "/exploration": { target: "http://127.0.0.1:8000", changeOrigin: true },
       "/planning": { target: "http://127.0.0.1:8000", changeOrigin: true },
       "/control": { target: "http://127.0.0.1:8000", changeOrigin: true },

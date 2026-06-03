@@ -17,6 +17,7 @@ import EventStreamModal from "./components/EventStreamModal.vue";
 import CommandBar from "./components/CommandBar.vue";
 import RegistrationMarks from "./components/RegistrationMarks.vue";
 import PetSpeech from "./components/PetSpeech.vue";
+import EditorPanel from "./components/EditorPanel.vue";
 
 const viewport = ref<HTMLDivElement | null>(null);
 let scene: PetScene | null = null;
@@ -191,6 +192,54 @@ function toggleCoverage() {
   if (coverageOn.value) void refreshCoverage();
   else scene?.setCoverage(null);
 }
+
+// ── scene editor: click-to-place objects ──────────────────────────────────
+// While editor mode is on, a left click on the floor POSTs an authored object
+// to /editor/object; the server broadcasts world_update so the marker appears
+// through the normal watch() path. Turning it off restores plain camera control.
+const editorMode = ref(false);
+const editorLabel = ref("cup");
+const placedIds = shallowRef<string[]>([]);
+
+async function placeObject(x: number, z: number) {
+  try {
+    const r = await fetch("/editor/object", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ class_label: editorLabel.value, x, z }),
+    });
+    if (!r.ok) return;
+    const body = (await r.json()) as { object_id: string };
+    placedIds.value = [...placedIds.value, body.object_id];
+  } catch (e) {
+    console.warn("place object failed", e);
+  }
+}
+
+function toggleEditor() {
+  editorMode.value = !editorMode.value;
+  scene?.setEditorMode(editorMode.value, editorMode.value ? placeObject : undefined);
+}
+
+async function undoLastPlaced() {
+  const id = placedIds.value[placedIds.value.length - 1];
+  if (!id) return;
+  try {
+    const r = await fetch(`/editor/object/${id}`, { method: "DELETE" });
+    if (r.ok || r.status === 404) placedIds.value = placedIds.value.slice(0, -1);
+  } catch (e) {
+    console.warn("undo failed", e);
+  }
+}
+
+async function clearPlaced() {
+  try {
+    await fetch("/semantic/reset", { method: "POST" });
+    placedIds.value = [];
+  } catch (e) {
+    console.warn("clear failed", e);
+  }
+}
 </script>
 
 <template>
@@ -230,6 +279,25 @@ function toggleCoverage() {
         >
           ● 覆蓋圖
         </button>
+
+        <!-- Scene editor toggle: switch into click-to-place object authoring. -->
+        <button
+          class="vp-toggle vp-toggle--editor"
+          :class="{ 'vp-toggle--on': editorMode }"
+          type="button"
+          @click="toggleEditor"
+        >
+          ✎ 編輯場景
+        </button>
+
+        <EditorPanel
+          v-if="editorMode"
+          v-model:label="editorLabel"
+          :placed-count="placedIds.length"
+          @undo="undoLastPlaced"
+          @clear="clearPlaced"
+          @close="toggleEditor"
+        />
 
         <!-- Compact bottom-left HUD: x / y / z · v · emoji. -->
         <div class="vp-hud">
@@ -355,6 +423,8 @@ function toggleCoverage() {
   cursor: pointer;
   transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
 }
+/* Second toggle stacks directly under the coverage one. */
+.vp-toggle--editor { top: 82px; }
 .vp-toggle:hover { color: var(--c-bone); border-color: var(--c-phosphor); }
 .vp-toggle--on {
   color: var(--c-phosphor);
