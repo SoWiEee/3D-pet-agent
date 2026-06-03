@@ -8,6 +8,7 @@
 import * as THREE from "three";
 import { Tween, Easing, Group as TweenGroup } from "@tweenjs/tween.js";
 import { Cat } from "./Cat";
+import { buildObjectModel, isBoxyLabel } from "./objectMeshes";
 import type { CoveragePayload, OccupancyPayload } from "../composables/useWebSocket";
 
 /** Argument for {@link PetScene.setExplorationGoal}. */
@@ -553,39 +554,44 @@ class WorldObjectsLayer {
 
       const item = new THREE.Group();
 
-      // Real-size bounding box — sized from extent_3d so the user can see
-      // each object at its actual physical scale relative to the cat.
+      // Class-appropriate model sized from extent_3d so the user sees each
+      // object at its actual physical scale relative to the cat — a cup as a
+      // cylinder, a ball as a sphere, a plant as pot+foliage, etc.
       const ex = Math.max(m.extent?.[0] ?? 0.08, WorldObjectsLayer.MIN_EXTENT);
       const ey = Math.max(m.extent?.[1] ?? 0.08, WorldObjectsLayer.MIN_EXTENT);
       const ez = Math.max(m.extent?.[2] ?? 0.08, WorldObjectsLayer.MIN_EXTENT);
-      const boxGeo = new THREE.BoxGeometry(ex, ey, ez);
-      const boxMat = new THREE.MeshStandardMaterial({
+      // Round / compound shapes carry no bright wireframe (unlike boxes), so
+      // they need a more solid fill to read as objects rather than haze.
+      const boxy = isBoxyLabel(m.label);
+      const fillMat = new THREE.MeshStandardMaterial({
         color: 0x74f7d0,
         transparent: true,
-        opacity: dotOp * 0.18,
-        roughness: 0.85,
+        opacity: dotOp * (boxy ? 0.3 : 0.55),
+        roughness: 0.7,
         metalness: 0.0,
-        emissive: 0x1a3a30,
-        emissiveIntensity: 0.4,
+        emissive: 0x1f5247,
+        emissiveIntensity: 0.6,
         depthWrite: false,
       });
-      const box = new THREE.Mesh(boxGeo, boxMat);
-      // center_3d_world reports the centroid; Y is treated as the centroid
-      // height too, so the box centre sits on the reported centre.
-      box.position.set(x, y, z);
-      item.add(box);
+      const model = buildObjectModel(m.label, ex, ey, ez, fillMat);
+      // center_3d_world reports the centroid; the model is centred on its local
+      // origin, so positioning the node places that centroid on the centre.
+      model.node.position.set(x, y, z);
+      item.add(model.node);
 
-      // Crisp wireframe edges on top of the translucent fill so silhouettes
-      // stay readable through the fog.
-      const edgesGeo = new THREE.EdgesGeometry(boxGeo);
-      const edgesMat = new THREE.LineBasicMaterial({
-        color: 0x74f7d0,
-        transparent: true,
-        opacity: dotOp * 0.7,
-      });
-      const edges = new THREE.LineSegments(edgesGeo, edgesMat);
-      edges.position.copy(box.position);
-      item.add(edges);
+      // Crisp wireframe edges for box-like shapes so silhouettes stay readable
+      // through the fog. Round/compound shapes skip this (edges read as noise).
+      let edgesMat: THREE.LineBasicMaterial | null = null;
+      if (model.outline) {
+        edgesMat = new THREE.LineBasicMaterial({
+          color: 0x74f7d0,
+          transparent: true,
+          opacity: dotOp * 0.7,
+        });
+        const edges = new THREE.LineSegments(model.outline, edgesMat);
+        edges.position.set(x, y, z);
+        item.add(edges);
+      }
 
       // Centroid pin (small) — keeps the debug "this is where backend
       // thinks the object centre is" cue.
@@ -608,14 +614,16 @@ class WorldObjectsLayer {
       item.add(halo);
 
       // Labels live in the SpatialInsightsModal panel — see App.vue.
-      void m.label;
+
+      const mats: THREE.Material[] = [fillMat, dotMat, stalkMat, haloMat];
+      const geos: THREE.BufferGeometry[] = [...model.geometries, stalkGeo];
+      if (edgesMat && model.outline) {
+        mats.push(edgesMat);
+        geos.push(model.outline);
+      }
 
       this.group.add(item);
-      this.items.push({
-        group: item,
-        mats: [boxMat, edgesMat, dotMat, stalkMat, haloMat],
-        geos: [boxGeo, edgesGeo, stalkGeo],
-      });
+      this.items.push({ group: item, mats, geos });
     }
   }
 }
