@@ -208,6 +208,31 @@ def _rule_report(text: str, _: _ParseConfig) -> CommandIntent | None:
     return None
 
 
+def _rule_pick_up(text: str, cfg: _ParseConfig) -> CommandIntent | None:
+    """Mobile-manipulator pick: "pick up X", "pick X up", "grab/grasp X"
+    (spec §14.5 Stage E). Grounds + navigates + emits a grasp sequence."""
+    m = re.match(
+        r"^\s*(?:pick\s+up|grab|grasp|fetch|pick)\s+(.+?)(?:\s+up)?\s*$",
+        text,
+        re.IGNORECASE,
+    )
+    if not m:
+        return None
+    rest = m.group(1).strip()
+    constraints, rest = _extract_constraints(rest, cfg)
+    relation, rest = _extract_relation(rest, cfg)
+    target = _split_target(rest, cfg) if rest else None
+    if not target or not target.class_label:
+        return None
+    return CommandIntent(
+        raw_text=text,
+        intent_type="pick_up",
+        target=target,
+        spatial_relation=relation,
+        constraints=constraints,
+    )
+
+
 def _rule_move_to(text: str, cfg: _ParseConfig) -> CommandIntent | None:
     """Catch-all for "go to X", "approach X", with optional relation + avoid."""
     m = re.match(
@@ -264,6 +289,7 @@ _RULES: tuple = (
     _rule_look_at,
     _rule_inspect,
     _rule_search,
+    _rule_pick_up,
     _rule_move_to,
     _rule_bare_target,
 )

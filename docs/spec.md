@@ -1073,6 +1073,33 @@ sees a ROS type.
   the `GraspSynthesizer` protocol — needs the trained CUDA model, so it is a
   lazy stub; the analytic sampler is the pip-only stand-in.
 
+- **Stage E — browser visualization** _(implemented: `frontend/src/renderer/Robot.ts`)_.
+  Makes the mobile manipulator visible in the live demo without hardware: the
+  pet runtime drives a stylized differential-drive **robot avatar** instead of
+  the cat. The robot is a `THREE.Group` exposing the same surface as `Cat`
+  (`group` / `setAnimation` / `faceTowards` / `update(dt, t)`), so `PetScene`
+  routes the existing `move_follow_path` traversal to whichever avatar is
+  active; a **Robot Mode** UI toggle (`PetScene.setMode('cat'|'robot')`) keeps
+  the cat demo intact.
+  - **Differential wheel animation:** during path-following `PetScene`
+    estimates linear speed `v` (Δposition/Δt) and yaw rate `ω` (Δheading/Δt)
+    each frame and rolls each wheel from the diff-drive relation
+    `v_left = v − ω·track/2`, `v_right = v + ω·track/2`,
+    `ω_wheel = v_side / r`. Outer wheels spin faster on a turn, inner wheels
+    can counter-rotate on a tight pivot — grounded in the same unicycle model
+    `control/` already uses, not a faked spin.
+  - **Pick visualization:** the command `pick up the X` / `grab the X` parses
+    to a new `pick_up` `IntentType`; `/command` grounds + plans navigation to
+    the object (reusing `move_to` standoff logic), then synthesises the grasp
+    via `research/manipulation.py` (`top_down_grasp_goal` +
+    `plan_pick_and_place`) and emits a new `pick_object` `PetAction`
+    (`{ target_object_id, grasp, manipulation_actions[] }`) after the
+    `move_follow_path`. The robot drives to the standoff, then
+    `Robot.playPickSequence` animates reach → grasp → lift, reparenting the
+    target marker mesh onto the gripper (lift-and-hold; place-down is a later
+    extension). Unreachable / ungraspable surfaces as a `runtime.ask` speech
+    bubble — no teleport, consistent with planner failures.
+
 **New contracts (Stage C+, implemented in `src/research/manipulation.py`):**
 
 - `GraspGoal`: `{ grasp_id, target_object_id, grasp_pose_world (position +
@@ -1081,6 +1108,9 @@ sees a ROS type.
 - `ManipulationAction`: `{ action ∈ {reach, grasp, lift, place, retract},
   target_pose_world, gripper, speed }` — the manipulation analogue of
   `PetAction`, consumed by the MoveIt2 backend (Stage C).
+- `pick_object` (`PetAction`): `{ target_object_id, grasp, manipulation_actions
+  }` — the Stage-E broadcast that hands a synthesised pick sequence to the
+  browser robot avatar.
 
 **Acceptance (Stage A):** a recorded `NavigationGoal` round-trips to a
 frame-correct goal pose, and a synthetic `/cmd_vel` stream integrates to the

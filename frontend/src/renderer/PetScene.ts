@@ -8,6 +8,7 @@
 import * as THREE from "three";
 import { Tween, Easing, Group as TweenGroup } from "@tweenjs/tween.js";
 import { Cat } from "./Cat";
+import { Robot } from "./Robot";
 import { buildObjectModel, isBoxyLabel } from "./objectMeshes";
 import type { CoveragePayload, OccupancyPayload } from "../composables/useWebSocket";
 
@@ -27,6 +28,15 @@ export class PetScene {
   camera: THREE.PerspectiveCamera;
   renderer: THREE.WebGLRenderer;
   cat: Cat;
+  robot: Robot;
+  /** The avatar currently receiving motion (cat by default; robot in Robot Mode). */
+  private avatar: Cat | Robot;
+  private mode: "cat" | "robot" = "cat";
+  /** A pick queued while the base is still driving; fired on arrival. */
+  private pendingPick: (() => void) | null = null;
+  // Per-frame motion estimate (for differential wheel speeds).
+  private prevAvatarPos = new THREE.Vector3();
+  private prevAvatarHeading = 0;
   targetMarker: TargetMarker;
   worldObjects!: WorldObjectsLayer;
   relationEdges!: RelationEdgesLayer;
@@ -95,6 +105,10 @@ export class PetScene {
     this.buildEnvironment();
     this.cat = new Cat();
     this.scene.add(this.cat.group);
+    this.robot = new Robot();
+    this.robot.group.visible = false;
+    this.scene.add(this.robot.group);
+    this.avatar = this.cat;
     this.targetMarker = new TargetMarker();
     this.scene.add(this.targetMarker.group);
     this.worldObjects = new WorldObjectsLayer();
@@ -185,20 +199,20 @@ export class PetScene {
     // Manual move — no planned path or exploration goal to show.
     this.plannedPath.set([]);
     this.explorationGoal.clear();
-    const start = this.cat.group.position.clone();
+    const start = this.avatar.group.position.clone();
     const dist = start.distanceTo(new THREE.Vector3(x, y, z));
     const duration = Math.max(300, (dist / Math.max(0.2, speed)) * 1000);
     this.targetMarker.placeAt(x, y, z);
-    this.cat.setAnimation("walk");
+    this.avatar.setAnimation("walk");
     // Face the destination.
-    this.cat.faceTowards(x, z);
+    this.avatar.faceTowards(x, z);
 
     const tween = new Tween(start, this.tweens)
       .to({ x, y, z }, duration)
       .easing(Easing.Quadratic.InOut)
-      .onUpdate((v) => this.cat.group.position.set(v.x, v.y, v.z))
+      .onUpdate((v) => this.avatar.group.position.set(v.x, v.y, v.z))
       .onComplete(() => {
-        this.cat.setAnimation("idle");
+        this.avatar.setAnimation("idle");
         this.activeMotion = null;
       })
       .start();
@@ -214,7 +228,7 @@ export class PetScene {
     if (!path || path.length === 0) return;
     this.cancelActiveMotion();
     const safeSpeed = Math.max(0.1, speed);
-    const cat = this.cat;
+    const cat = this.avatar;
 
     // Mark the final goal + draw the planned trajectory.
     const goal = path[path.length - 1];
@@ -256,6 +270,12 @@ export class PetScene {
         // Arrived — fade the planned path and retire the goal beacon.
         this.plannedPath.set([]);
         this.explorationGoal.clear();
+        // If a pick was queued while driving, run it now that we've arrived.
+        if (this.pendingPick) {
+          const pick = this.pendingPick;
+          this.pendingPick = null;
+          pick();
+        }
       });
       tweens[0].start();
     }
@@ -271,15 +291,53 @@ export class PetScene {
   }
 
   lookAt(x: number, y: number, z: number) {
-    this.cat.lookAtPoint(x, y, z);
+    this.avatar.lookAtPoint(x, y, z);
   }
 
   setEmotion(name: string) {
-    this.cat.setEmotion(name);
+    this.avatar.setEmotion(name);
   }
 
   setAnimation(name: string) {
-    this.cat.setAnimation(name);
+    this.avatar.setAnimation(name);
+  }
+
+  /** Swap the active avatar (Robot Mode toggle, spec §14.5 Stage E). The new
+   *  avatar inherits the old one's pose so the swap is seamless. */
+  setMode(mode: "cat" | "robot") {
+    if (mode === this.mode) return;
+    this.mode = mode;
+    const next: Cat | Robot = mode === "robot" ? this.robot : this.cat;
+    const prev = this.avatar;
+    next.group.position.copy(prev.group.position);
+    next.group.rotation.y = prev.group.rotation.y;
+    this.cat.group.visible = mode === "cat";
+    this.robot.group.visible = mode === "robot";
+    if (mode === "cat") this.robot.resetArm();
+    this.avatar = next;
+  }
+
+  getMode(): "cat" | "robot" {
+    return this.mode;
+  }
+
+  /** Stage E: animate the robot arm picking the object at `targetWorld`. If the
+   *  base is still driving, queue it to run on arrival. In cat mode it's a
+   *  no-op (the cat can't manipulate) beyond a glance at the target. */
+  playPick(targetWorld: [number, number, number]) {
+    const run = () => {
+      if (this.mode !== "robot") {
+        this.avatar.lookAtPoint(targetWorld[0], targetWorld[1], targetWorld[2]);
+        return;
+      }
+      this.robot.faceTowards(targetWorld[0], targetWorld[2]);
+      this.robot.playPickSequence(this.tweens);
+    };
+    if (this.activeMotion?.kind === "path") {
+      this.pendingPick = run;
+    } else {
+      run();
+    }
   }
 
   /** Phase 3/4: render lifted + tracked object centroids as phosphor markers.
@@ -470,7 +528,23 @@ export class PetScene {
     const t = performance.now();
     this.tweens.update(t);
     const dt = this.clock.getDelta();
+    // Estimate the active avatar's linear speed v and yaw rate ω from this
+    // frame's motion, then feed the robot's differential wheels (spec §14.5).
+    if (dt > 1e-4) {
+      const pos = this.avatar.group.position;
+      const heading = this.avatar.group.rotation.y;
+      const v = pos.distanceTo(this.prevAvatarPos) / dt;
+      let dHeading = heading - this.prevAvatarHeading;
+      // Wrap to (−π, π] so a ±2π flip doesn't spike ω.
+      dHeading = Math.atan2(Math.sin(dHeading), Math.cos(dHeading));
+      // rotation.y = −atan2(dz,dx), so world yaw rate is the negated derivative.
+      const omega = -dHeading / dt;
+      this.robot.setDrive(v, omega);
+      this.prevAvatarPos.copy(pos);
+      this.prevAvatarHeading = heading;
+    }
     this.cat.update(dt, t);
+    this.robot.update(dt, t);
     this.targetMarker.update(dt, t);
     this.plannedPath.updateAnim(t);
     this.explorationGoal.updateAnim(t);

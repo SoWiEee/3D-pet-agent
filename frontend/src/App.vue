@@ -57,6 +57,11 @@ watch(lastAction, (a: PetAction | null) => {
     } else {
       scene.clearExplorationGoal();
     }
+  } else if (a.action === "pick_object" && a.grasp) {
+    // Stage E (§14.5): animate the robot arm picking the grasp target. The
+    // base is usually still driving (move_follow_path fired first); PetScene
+    // queues the pick until arrival.
+    scene.playPick(a.grasp.grasp_pose_world.position);
   } else if (a.action === "look_at" && a.target_position_3d) {
     const [x, y, z] = a.target_position_3d;
     scene.lookAt(x, y, z);
@@ -221,6 +226,14 @@ function toggleEditor() {
   scene?.setEditorMode(editorMode.value, editorMode.value ? placeObject : undefined);
 }
 
+// Robot Mode (spec §14.5 Stage E): swap the cat avatar for the differential-
+// drive robot so "pick up X" can be visualised (drive + arm grasp).
+const robotMode = ref(false);
+function toggleRobot() {
+  robotMode.value = !robotMode.value;
+  scene?.setMode(robotMode.value ? "robot" : "cat");
+}
+
 async function undoLastPlaced() {
   const id = placedIds.value[placedIds.value.length - 1];
   if (!id) return;
@@ -288,6 +301,16 @@ async function clearPlaced() {
           @click="toggleEditor"
         >
           ✎ 編輯場景
+        </button>
+
+        <!-- Robot Mode toggle (Stage E): cat ⇄ wheeled manipulator. -->
+        <button
+          class="vp-toggle vp-toggle--robot"
+          :class="{ 'vp-toggle--on': robotMode }"
+          type="button"
+          @click="toggleRobot"
+        >
+          ⊞ 機器人
         </button>
 
         <EditorPanel
@@ -423,8 +446,9 @@ async function clearPlaced() {
   cursor: pointer;
   transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
 }
-/* Second toggle stacks directly under the coverage one. */
+/* Toggles stack vertically under the coverage one. */
 .vp-toggle--editor { top: 82px; }
+.vp-toggle--robot { top: 122px; }
 .vp-toggle:hover { color: var(--c-bone); border-color: var(--c-phosphor); }
 .vp-toggle--on {
   color: var(--c-phosphor);

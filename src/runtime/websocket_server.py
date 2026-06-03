@@ -51,6 +51,7 @@ from ..planning import (
     Planner,
     PlannerConfig,
 )
+from ..research.manipulation import ArmConfig, plan_pick_and_place, top_down_grasp_goal
 from ..spatial import SceneGraphBuilder, SemanticMap
 from ..spatial.object_lifter import ObjectConfidence, ObjectState3D
 from ..tracking import Tracker
@@ -541,6 +542,26 @@ def _reasoning_fields(result: Any) -> dict[str, Any]:
     return out
 
 
+def _synthesize_pick(
+    track_id: str,
+    arm_base_world: tuple[float, float, float],
+    min_confidence: float = 0.2,
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """Stage E (§14.5) — synthesise a top-down grasp + pick-and-place sequence
+    for the target object, with the arm mounted at the robot's arrival pose so
+    reach is evaluated relative to the base. Returns ``(grasp, action_dicts)``
+    or ``None`` when the object is out of reach / too wide for the gripper."""
+    obj = semantic_map.get(track_id)
+    if obj is None:
+        return None
+    arm = ArmConfig(base_position_world=arm_base_world)
+    grasp = top_down_grasp_goal(obj, arm)
+    if grasp.confidence < min_confidence:
+        return None
+    actions = plan_pick_and_place(grasp, place_position_world=obj.center_3d_world, arm=arm)
+    return grasp.model_dump(), [a.model_dump() for a in actions]
+
+
 @app.post("/command")
 async def push_command(req: CommandRequest) -> dict[str, Any]:
     """Phase 6: parse a user utterance and ground it against the live map.
@@ -677,7 +698,7 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
         look_at_object_id=goal.target_object_id,
         controller_trace=_last_trace_summary,
     )
-    return {
+    response = {
         "parsed": True,
         "intent": intent.model_dump(),
         "status": result.status,
@@ -688,6 +709,24 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
         "control_status": trace.summary.status,
         **_reasoning_fields(result),
     }
+
+    # Stage E (§14.5): a pick command also synthesises a grasp from the target
+    # object and broadcasts the arm sequence the robot avatar animates on
+    # arrival. A move (intent move_to) skips this entirely.
+    if intent.intent_type == "pick_up" and goal.target_object_id is not None:
+        # The arm is mounted on the base, which arrives next to the object, so
+        # reach is evaluated from the robot's final pose (not the world origin).
+        ax, _ay, az = trace.path_world[-1]
+        pick = _synthesize_pick(goal.target_object_id, (ax, 0.3, az))
+        if pick is not None:
+            grasp_dict, actions = pick
+            runtime.pick_object(goal.target_object_id, grasp_dict, actions)
+            response["pick"] = {"grasp": grasp_dict, "actions": len(actions)}
+        else:
+            runtime.ask("I can reach it, but I can't get a grip on that object.")
+            response["pick"] = {"feasible": False}
+
+    return response
 
 
 def _execute_exploration_goal(intent: Any, ex_goal: ExplorationGoal) -> dict[str, Any]:

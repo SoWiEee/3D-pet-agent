@@ -59,6 +59,7 @@ class PetAction(BaseModel):
         "ask",
         "state",
         "world_update",
+        "pick_object",
     ]
     target_position_3d: Waypoint | None = None
     path: list[Waypoint] | None = None
@@ -77,6 +78,11 @@ class PetAction(BaseModel):
     # target_position_world, score, explanation. Rides along the
     # move_follow_path broadcast so the renderer can mark the viewpoint.
     exploration_goal: dict[str, Any] | None = None
+    # Stage E (§14.5): mobile-manipulator pick — the synthesised grasp + arm
+    # primitive sequence the browser robot avatar animates after arriving.
+    target_object_id: str | None = None
+    grasp: dict[str, Any] | None = None
+    manipulation_actions: list[dict[str, Any]] | None = None
     timestamp: float = Field(default_factory=time.time)
 
 
@@ -198,6 +204,27 @@ class PetRuntime:
         self.state.speech = text
         self.state.updated_at = time.time()
         action = PetAction(action="ask", speech=text, state=self.state.model_copy())
+        self._broadcast(action)
+        return action
+
+    def pick_object(
+        self,
+        target_object_id: str,
+        grasp: dict[str, Any],
+        manipulation_actions: list[dict[str, Any]],
+    ) -> PetAction:
+        """Stage E (§14.5) — hand a synthesised pick sequence to the robot
+        avatar. Broadcast after the ``move_follow_path`` that drives the base
+        to the grasp standoff; the renderer animates the arm + reparents the
+        target marker mesh onto the gripper."""
+        self.state.updated_at = time.time()
+        action = PetAction(
+            action="pick_object",
+            target_object_id=target_object_id,
+            grasp=grasp,
+            manipulation_actions=manipulation_actions,
+            state=self.state.model_copy(),
+        )
         self._broadcast(action)
         return action
 

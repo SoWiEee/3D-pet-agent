@@ -137,7 +137,8 @@ export interface PetAction {
     | "set_emotion"
     | "ask"
     | "state"
-    | "world_update";
+    | "world_update"
+    | "pick_object";
   target_position_3d?: Waypoint | null;
   path?: Waypoint[] | null;
   look_at_object_id?: string | null;
@@ -149,7 +150,29 @@ export interface PetAction {
   world_objects?: WorldObjectMarker[] | null;
   scene_graph?: SceneGraphPayload | null;
   exploration_goal?: ExplorationGoalPayload | null;
+  // Stage E (§14.5): mobile-manipulator pick — the synthesised grasp + arm
+  // primitive sequence for the robot avatar to animate.
+  target_object_id?: string | null;
+  grasp?: GraspPayload | null;
+  manipulation_actions?: ManipulationActionPayload[] | null;
   timestamp?: number;
+}
+
+export interface GraspPayload {
+  grasp_id: string;
+  target_object_id: string;
+  grasp_pose_world: { position: [number, number, number]; orientation: number[] };
+  approach_vector_world: [number, number, number];
+  gripper_width: number;
+  confidence: number;
+  explanation: string;
+}
+
+export interface ManipulationActionPayload {
+  action: "reach" | "grasp" | "lift" | "place" | "retract";
+  target_pose_world: { position: [number, number, number]; orientation: number[] };
+  gripper: "open" | "closed";
+  speed: number;
 }
 
 export type ConnState = "connecting" | "open" | "closed" | "error";

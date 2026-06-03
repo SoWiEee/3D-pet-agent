@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 IntentType = Literal[
     "move_to",
+    "pick_up",
     "hide",
     "look_at",
     "follow",
