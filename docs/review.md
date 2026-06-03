@@ -11,22 +11,6 @@
 
 對應 `docs/spec.md` 已明文要求、但目前實作沒到位的部分。
 
-### A4. Collision counting 精度
-
-**現狀：** `src/evaluation/runner.py::_count_collisions` 只取 waypoint 取樣
-然後查 occupancy cell，是否 blocked。
-
-**問題：** 長 segment 中段穿過 obstacle 不會被計數（取樣點在兩端、obstacle 在中間）。
-
-**修補方向：**
-- 重用 `src/planning/astar.py::line_of_sight`（已有 Bresenham 實作）
-- 對每兩個相鄰 waypoint 之間的 line 做 LOS 檢查
-- 任何 line 經過的 blocked cell 都算一次 collision
-
-**成本：** 低（重用既有函式）
-
----
-
 ### A5. Preempt latency 量測
 
 **現狀：** Spec §11.4 規定新指令必須在 100 ms 內 preempt 舊路徑。
@@ -47,20 +31,6 @@
 ## B. 實作品質可精進
 
 工作正常但可以做得更好。
-
-### B5. Speech bubble queue
-
-**現狀：** `PetSpeech` 直接顯示最新 `petState.speech`。快速連發
-`runtime.ask` 會互蓋，例如 grounding 的 explanation 講完前
-clarification 又 push 進來。
-
-**精進方向：**
-- Server 端把 ask 排成 queue，依序廣播
-- 或前端 buffer 顯示時間（每段最少 1.5 s）
-
-**成本：** 低
-
----
 
 ### B6. CI 實際驗證
 
@@ -105,11 +75,10 @@ ruff-format 失敗，但尚未確認 cold-cache 環境下完整安裝步驟的 t
 
 按 **CP 值 = (對 demo 影響) / (修補成本)** 排：
 
-1. **A4 Collision counting** — 重用既有函式、改善 eval 精度
-2. **A5 / B5** — 小儀器化 + 小 UX，順手可做
-3. **C Eval replay UI** — 拉高 demo 觀感
-4. **B6 CI cold-cache** — 觸發即知
-5. **D 系列** — 依預算與研究目標決定
+1. **A5 Preempt latency** — 小儀器化 + 一條 assertion
+2. **C Eval replay UI** — 拉高 demo 觀感
+3. **B6 CI cold-cache** — 觸發即知
+4. **D 系列** — 依預算與研究目標決定
 
 ---
 
