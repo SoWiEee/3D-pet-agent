@@ -148,6 +148,11 @@ class PerceptionLoop:
             image_size=frame.shape[:2], horizontal_fov_deg=fov_deg
         )
 
+        # Optional Visual SLAM sidecar (spec §14.1) — opt-in via config; the
+        # default keeps the camera fixed at the world origin. Lazy-imported so
+        # cv2/scipy only load when SLAM is actually requested.
+        self._pose_source = self._make_pose_source(self._intrinsics)
+
         self._stop_event.clear()
         self.status.running = True
         self.status.started_at = time.time()
@@ -159,6 +164,16 @@ class PerceptionLoop:
             self.status.target_hz,
             len(prompts),
         )
+
+    def _make_pose_source(self, intrinsics: CameraIntrinsics) -> PoseSource:
+        """Select the pose source from config. ``slam`` enables the ORB visual
+        odometry sidecar; anything else keeps the fixed origin pose."""
+        if self.cfg.settings.pose_source == "slam":
+            from ..research.slam_adapter import SLAMPoseSource
+
+            log.info("perception loop using SLAM pose source (ORB visual odometry)")
+            return SLAMPoseSource(intrinsics)
+        return FixedPoseSource()
 
     async def stop(self) -> None:
         """Cancel the background task and close the webcam."""
@@ -221,6 +236,13 @@ class PerceptionLoop:
 
         frame_id = self.status.last_frame_id + 1
         frame = await asyncio.to_thread(self._webcam.read)
+
+        # Streaming pose sources (SLAM) need the raw frame pushed in before the
+        # pipeline queries the pose for this frame. Off-thread — ORB is CPU work.
+        track = getattr(self._pose_source, "track", None)
+        if track is not None:
+            await asyncio.to_thread(track, frame_id, frame)
+
         # Heavy work (torch inference) runs in a thread so the event loop
         # stays responsive for WebSocket clients.
         result, _depth, tracked = await asyncio.to_thread(

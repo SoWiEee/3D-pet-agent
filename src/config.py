@@ -169,6 +169,10 @@ class Settings(BaseSettings):
     device: str = "cuda"
     camera_index: int = 0
     weights_dir: str = "weights"
+    # Pose source for the live perception loop. "slam" enables the optional
+    # ORB visual-odometry sidecar (spec §14.1); default "fixed" keeps the
+    # camera at the world origin. Override with PET_AGENT_POSE_SOURCE=slam.
+    pose_source: Literal["fixed", "sim", "slam"] = "fixed"
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:

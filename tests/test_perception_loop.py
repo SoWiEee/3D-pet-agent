@@ -190,3 +190,22 @@ async def test_loop_status_fields_populated(loop_with_broadcast) -> None:
     assert status.target_hz == 15.0
     assert status.started_at is not None
     await loop.stop()
+
+
+def test_make_pose_source_defaults_to_fixed(loop_with_broadcast) -> None:
+    from src.spatial.frame_packet import CameraIntrinsics
+    from src.spatial.pose_source import FixedPoseSource
+
+    loop, _ = loop_with_broadcast
+    intr = CameraIntrinsics(fx=500.0, fy=500.0, cx=320.0, cy=240.0)
+    assert isinstance(loop._make_pose_source(intr), FixedPoseSource)
+
+
+def test_make_pose_source_selects_slam_when_configured(loop_with_broadcast) -> None:
+    from src.research.slam_adapter import SLAMPoseSource
+    from src.spatial.frame_packet import CameraIntrinsics
+
+    loop, _ = loop_with_broadcast
+    loop.cfg.settings.pose_source = "slam"
+    intr = CameraIntrinsics(fx=500.0, fy=500.0, cx=320.0, cy=240.0)
+    assert isinstance(loop._make_pose_source(intr), SLAMPoseSource)
