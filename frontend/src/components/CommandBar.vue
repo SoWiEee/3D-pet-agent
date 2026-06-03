@@ -13,6 +13,14 @@ function quick(action: PetAction) {
   emit("send", action);
 }
 
+// Quick buttons that exercise the *real* pipeline: parse → ground → A* → control.
+// Unlike `quick()` (raw WS action), these hand free-form text to /command, so the
+// pet navigates to the grounded object in the live semantic map — not a hardcoded
+// point — and the reasoning panel / path-failure overlay light up like a typed command.
+function quickCommand(t: string) {
+  void postCommand(t);
+}
+
 function submit() {
   const v = text.value.trim().toLowerCase();
   if (!v) return;
@@ -92,20 +100,9 @@ async function postCommand(t: string): Promise<void> {
     <div class="cmd__chrome">
       <span class="cmd__label">cmd / ttyp0</span>
       <div class="cmd__quick">
-        <button @click="quick({ action: 'move_to', target_position_3d: [0.6, 0, 0.8] })">P1 · cup</button>
-        <button @click="quick({ action: 'move_to', target_position_3d: [-0.5, 0, 1.0] })">P2 · keyboard</button>
-        <button
-          @click="quick({
-            action: 'move_follow_path',
-            path: [
-              [0.0, 0, 0.0],
-              [0.3, 0, 0.4],
-              [0.55, 0, 0.85],
-              [0.55, 0, 1.20],
-            ],
-            speed: 0.45,
-          })"
-        >path · A*</button>
+        <button @click="quickCommand('go to the cup')">go · cup</button>
+        <button @click="quickCommand('go to the chair near the table')">go · chair near table</button>
+        <button @click="quickCommand('explore')">explore · A*</button>
         <button @click="quick({ action: 'play_animation', animation: 'sit' })">sit</button>
         <button @click="quick({ action: 'play_animation', animation: 'hide' })">hide</button>
         <button @click="quick({ action: 'set_emotion', emotion: 'curious' })">curious</button>
