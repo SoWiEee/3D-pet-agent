@@ -226,6 +226,12 @@ export class PetScene {
    */
   followPath(path: [number, number, number][], speed = 0.35) {
     if (!path || path.length === 0) return;
+    // The robot drives like a car — one continuous sweep along a smooth curve,
+    // not the cat's ease-in-out-per-waypoint stepping.
+    if (this.mode === "robot") {
+      this.followPathContinuous(path, speed);
+      return;
+    }
     this.cancelActiveMotion();
     const safeSpeed = Math.max(0.1, speed);
     const cat = this.avatar;
@@ -280,6 +286,69 @@ export class PetScene {
       tweens[0].start();
     }
     this.activeMotion = { kind: "path", tweens };
+  }
+
+  /**
+   * Continuous, car-like traversal: fit a Catmull-Rom curve through the
+   * waypoints and sweep position + heading along it with a single ease, so the
+   * robot accelerates once, holds speed through corners (steering its front
+   * wheels), and decelerates once at the goal — no per-waypoint stops.
+   */
+  private followPathContinuous(path: [number, number, number][], speed: number) {
+    this.cancelActiveMotion();
+    const safeSpeed = Math.max(0.1, speed);
+    const avatar = this.avatar;
+
+    const goal = path[path.length - 1];
+    this.targetMarker.placeAt(goal[0], goal[1], goal[2]);
+    this.plannedPath.set(path);
+    avatar.setAnimation("walk");
+
+    // Snap to the path start if we're far from it (handles replans).
+    const first = new THREE.Vector3(path[0][0], path[0][1], path[0][2]);
+    if (avatar.group.position.distanceTo(first) > 0.6) avatar.group.position.copy(first);
+
+    const points = [avatar.group.position.clone(), ...path.slice(1).map((p) => new THREE.Vector3(p[0], p[1], p[2]))];
+    if (points.length < 2) {
+      avatar.setAnimation("idle");
+      return;
+    }
+    const curve = new THREE.CatmullRomCurve3(points, false, "catmullrom", 0.5);
+    const length = Math.max(0.001, curve.getLength());
+    const duration = Math.max(400, (length / safeSpeed) * 1000);
+
+    const cursor = { t: 0 };
+    const tan = new THREE.Vector3();
+    const tween = new Tween(cursor, this.tweens)
+      .to({ t: 1 }, duration)
+      .easing(Easing.Quadratic.InOut)
+      .onUpdate((c) => {
+        const tt = Math.min(1, Math.max(0, c.t));
+        const p = curve.getPointAt(tt);
+        avatar.group.position.copy(p);
+        curve.getTangentAt(tt, tan);
+        // Steer toward the curve tangent — heading stays continuous, so the
+        // per-frame ω estimate (and thus the front-wheel steer) is smooth.
+        avatar.faceTowards(p.x + tan.x, p.z + tan.z);
+      })
+      .onComplete(() => {
+        avatar.setAnimation("idle");
+        this.activeMotion = null;
+        this.plannedPath.set([]);
+        this.explorationGoal.clear();
+        if (this.pendingPick) {
+          const pick = this.pendingPick;
+          this.pendingPick = null;
+          pick();
+        }
+      })
+      .start();
+    // The cursor tween animates {t}, but activeMotion only ever calls .stop();
+    // store it under the shared motion-tween type.
+    this.activeMotion = {
+      kind: "path",
+      tweens: [tween as unknown as Tween<{ x: number; y: number; z: number }>],
+    };
   }
 
   private cancelActiveMotion() {

@@ -22,15 +22,22 @@ import * as THREE from "three";
 import { Easing, Group as TweenGroup, Tween } from "@tweenjs/tween.js";
 
 const WHEEL_RADIUS = 0.12;
-const TRACK_WIDTH = 0.44; // axle length (wheel separation), metres
+const TRACK_WIDTH = 0.48; // axle length (left-right wheel separation), metres
+const WHEELBASE = 0.44; // front-rear axle separation, metres
+const MAX_STEER = 0.55; // max front-wheel steering angle, radians (~31°)
+const STEER_SIGN = -1; // calibrates steer direction to the body's yaw convention
 
-// Arm rest / extreme joint angles (radians, about the local Z axle).
-const SHOULDER_REST = -0.5;
-const SHOULDER_DOWN = 1.7; // added when reaching toward the floor
-const SHOULDER_LIFT = 1.1; // subtracted when lifting the held object
-const ELBOW_REST = 0.7;
-const ELBOW_BEND = 0.5;
-const ELBOW_RAISE = 0.6;
+// Arm joint angles (radians, pitch about local Z; +z swings the segment from
+// forward toward up). The shoulder sits on TOP of the chassis. Tuned so the
+// world pitches read: stowed → upper up-back (1.9) + forearm flat over the deck
+// (0.1); reach → upper forward-down (−0.5) + forearm steep to the floor (−1.3);
+// lift → raised with the held object. (forearm world pitch = shoulder + elbow.)
+const SHOULDER_REST = 1.9; // stowed: upper arm up and slightly back
+const SHOULDER_DOWN = 2.4; // reach: swing forward-down to the floor
+const SHOULDER_LIFT = 1.5; // lift: raise back up with the object
+const ELBOW_REST = -1.8; // stowed: fold the forearm flat over the deck
+const ELBOW_BEND = 1.0; // reach: straighten the forearm toward the floor
+const ELBOW_RAISE = 0.1;
 
 interface ArmPose {
   reach: number; // 0 = stowed, 1 = fingertip near floor
@@ -41,8 +48,11 @@ interface ArmPose {
 export class Robot {
   group = new THREE.Group();
 
-  private leftWheels: THREE.Mesh[] = [];
-  private rightWheels: THREE.Mesh[] = [];
+  // Each wheel records its roll mesh + side (for differential speed). Front
+  // wheels additionally hang under a steer pivot that yaws like car steering.
+  private wheels: { mesh: THREE.Mesh; isLeft: boolean }[] = [];
+  private frontSteers: THREE.Group[] = [];
+  private steerAngle = 0;
   private shoulder: THREE.Group;
   private elbow: THREE.Group;
   private fingerL: THREE.Mesh;
@@ -81,25 +91,40 @@ export class Robot {
     this.group.add(visor);
 
     // ── wheels (axle along ±Z) ───────────────────────────────────────────
+    // Front wheels (+X) hang under a steer pivot so they yaw when turning, like
+    // a car; rear wheels are fixed. All wheels roll via the mesh's local Z.
     const wheelGeo = new THREE.CylinderGeometry(WHEEL_RADIUS, WHEEL_RADIUS, 0.06, 20);
     wheelGeo.rotateX(Math.PI / 2); // bake axis Y → Z so rolling = rotation.z
     const spokeGeo = new THREE.BoxGeometry(WHEEL_RADIUS * 1.6, 0.02, 0.065);
     for (const sx of [0.22, -0.22]) {
+      const isFront = sx > 0;
       for (const sz of [0.24, -0.24]) {
         const wheel = new THREE.Mesh(wheelGeo, tyreMat);
-        wheel.position.set(sx, WHEEL_RADIUS, sz);
         wheel.castShadow = true;
-        // A spoke bar so the spin is visible.
-        const spoke = new THREE.Mesh(spokeGeo, hubMat);
-        wheel.add(spoke);
-        this.group.add(wheel);
-        (sz > 0 ? this.leftWheels : this.rightWheels).push(wheel);
+        wheel.add(new THREE.Mesh(spokeGeo, hubMat)); // spoke makes spin visible
+        if (isFront) {
+          // Steer pivot at the wheel hub; the wheel rolls inside it.
+          const steer = new THREE.Group();
+          steer.position.set(sx, WHEEL_RADIUS, sz);
+          steer.add(wheel);
+          this.group.add(steer);
+          this.frontSteers.push(steer);
+        } else {
+          wheel.position.set(sx, WHEEL_RADIUS, sz);
+          this.group.add(wheel);
+        }
+        this.wheels.push({ mesh: wheel, isLeft: sz > 0 });
       }
     }
 
-    // ── 2-segment arm on top, shoulder near the back ──────────────────────
+    // ── 2-segment arm mounted on TOP of the chassis (centred) ─────────────
+    // A short mast lifts the shoulder above the deck so the folded arm clears
+    // the body and the reach swings down past the wheels to the floor.
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.12, 12), hubMat);
+    mast.position.set(0, 0.37, 0);
+    this.group.add(mast);
     this.shoulder = new THREE.Group();
-    this.shoulder.position.set(-0.12, 0.31, 0);
+    this.shoulder.position.set(0, 0.42, 0);
     this.group.add(this.shoulder);
     const upper = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.06, 0.06), this.bodyMat);
     upper.position.set(0.17, 0, 0); // extends along the shoulder's local +X
@@ -175,8 +200,16 @@ export class Robot {
     const half = (this.driveOmega * TRACK_WIDTH) / 2;
     const dL = ((this.driveV - half) / WHEEL_RADIUS) * dt;
     const dR = ((this.driveV + half) / WHEEL_RADIUS) * dt;
-    for (const w of this.leftWheels) w.rotation.z += dL;
-    for (const w of this.rightWheels) w.rotation.z += dR;
+    for (const w of this.wheels) w.mesh.rotation.z += w.isLeft ? dL : dR;
+
+    // Front-wheel steering (bicycle model): δ = atan(L·ω / v), clamped. A floor
+    // on v keeps a near-stationary pivot from saturating instantly; we lerp the
+    // angle so the wheels swing rather than snap.
+    const vRef = Math.max(Math.abs(this.driveV), 0.18);
+    let steer = Math.atan2(this.driveOmega * WHEELBASE, vRef) * STEER_SIGN;
+    steer = Math.max(-MAX_STEER, Math.min(MAX_STEER, steer));
+    this.steerAngle += (steer - this.steerAngle) * Math.min(1, dt * 9);
+    for (const s of this.frontSteers) s.rotation.y = this.steerAngle;
 
     // Subtle idle bob so a parked robot still feels alive.
     this.bobPhase += dt * 2;
@@ -221,8 +254,8 @@ export class Robot {
 
   private applyArmPose() {
     const p = this.pose;
-    this.shoulder.rotation.z = SHOULDER_REST + p.reach * SHOULDER_DOWN - p.lift * SHOULDER_LIFT;
-    this.elbow.rotation.z = ELBOW_REST + p.reach * ELBOW_BEND - p.lift * ELBOW_RAISE;
+    this.shoulder.rotation.z = SHOULDER_REST - p.reach * SHOULDER_DOWN + p.lift * SHOULDER_LIFT;
+    this.elbow.rotation.z = ELBOW_REST + p.reach * ELBOW_BEND + p.lift * ELBOW_RAISE;
     // Fingers close inward along local Z as grip → 1.
     const open = 0.04 * (1 - p.grip) + 0.012;
     this.fingerL.position.z = open;
