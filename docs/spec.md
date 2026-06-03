@@ -1036,9 +1036,19 @@ sees a ROS type.
   import) drops in for the live graph. Our global A* may either feed Nav2 as a
   goal source or be deferred to Nav2's own global+local planners — the bridge
   only commits to the goal/cmd_vel contract.
-- **Stage B — real SLAM + sensors.** Replace ORB-VO (§14.1) with ORB-SLAM3 /
-  Nav2 AMCL on a real LiDAR / RGB-D for drift-free localisation and a metric
-  occupancy layer beneath the existing semantic layer.
+- **Stage B — real SLAM + sensors** _(metric layer implemented:
+  `src/research/metric_map.py`)_. `MetricOccupancyMap` is a log-odds
+  occupancy grid fused from range scans (`RangeScan`) by ray-casting each beam
+  — free along the beam, occupied at the return cell — reusing
+  `planning.astar.iter_line_cells` so the metric and planning layers share one
+  Bresenham walk. It exports a binary `OccupancyGrid` that slots straight
+  beneath the semantic layer (`to_occupancy_grid`, with an
+  `unknown_is_blocked` toggle for conservative planning). `simulate_scan`
+  casts synthetic beams against any binary grid so the mapper round-trips
+  offline; a real `sensor_msgs/LaserScan` (via Stage A's bridge) fills a
+  `RangeScan` instead. **Still TODO:** swap ORB-VO (§14.1) for ORB-SLAM3 /
+  Nav2 AMCL for drift-free *localisation* — the metric mapping half is done,
+  the SLAM-grade pose half is not.
 - **Stage C — arm + MoveIt2.** Add a `ManipulationAction` actuation contract
   and a MoveIt2 backend for collision-aware IK + gripper control; first target
   is placement / pick at a *known* object pose from the SemanticMap.
