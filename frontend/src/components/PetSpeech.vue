@@ -1,22 +1,51 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { onBeforeUnmount, ref, watch } from "vue";
+
+// Speech queue (B5): rapid `runtime.ask` broadcasts used to overwrite each
+// other — an explanation could be replaced by a clarification before it was
+// readable. We queue distinct lines and show each for a minimum dwell, so
+// every line gets its moment; the last one lingers a little longer.
+const MIN_VISIBLE_MS = 1800; // each line stays at least this long
+const LINGER_MS = 4500; // the final line lingers before fading out
 
 const props = defineProps<{ text: string | null }>();
+
+const shown = ref("");
 const visible = ref(false);
-let hideTimer: number | undefined;
+const queue = ref<string[]>([]);
+let lastEnqueued: string | null = null;
+let timer: number | undefined;
 
 watch(
   () => props.text,
   (v) => {
-    if (!v) return;
-    visible.value = false;
-    requestAnimationFrame(() => (visible.value = true));
-    if (hideTimer) window.clearTimeout(hideTimer);
-    hideTimer = window.setTimeout(() => (visible.value = false), 4500);
-  }
+    // Ignore clears and unchanged re-broadcasts (speech persists in PetState).
+    if (!v || v === lastEnqueued) return;
+    lastEnqueued = v;
+    queue.value = [...queue.value, v];
+    if (!visible.value) advance();
+  },
 );
 
-const shown = computed(() => props.text ?? "");
+function advance() {
+  if (timer) window.clearTimeout(timer);
+  const next = queue.value[0];
+  if (next === undefined) {
+    visible.value = false;
+    return;
+  }
+  queue.value = queue.value.slice(1);
+  shown.value = next;
+  // Re-trigger the rise transition for each new line.
+  visible.value = false;
+  requestAnimationFrame(() => (visible.value = true));
+  // Dwell longer on the last line; otherwise move on to the next queued line.
+  timer = window.setTimeout(advance, queue.value.length > 0 ? MIN_VISIBLE_MS : LINGER_MS);
+}
+
+onBeforeUnmount(() => {
+  if (timer) window.clearTimeout(timer);
+});
 </script>
 
 <template>
