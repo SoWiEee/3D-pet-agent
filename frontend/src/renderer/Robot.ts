@@ -62,6 +62,12 @@ export class Robot {
 
   private driveV = 0;
   private driveOmega = 0;
+  // When a backend motion profile is playing, the steering angle and reverse
+  // gear come straight from the controller (setControl); otherwise they're
+  // estimated from v/ω in update() (manual moves / cat-follow).
+  private steerOverride: number | null = null;
+  private gear = 1;
+  private reverseMat: THREE.MeshStandardMaterial;
   private pose: ArmPose = { reach: 0, grip: 0, lift: 0 };
   private bobPhase = 0;
 
@@ -89,6 +95,20 @@ export class Robot {
     const visor = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.07, 0.34), accentMat);
     visor.position.set(0.3, 0.27, 0);
     this.group.add(visor);
+
+    // Rear reverse lights — glow white-red while the car backs up (gear < 0),
+    // the visual tell for the "倒車喬角度" maneuver.
+    this.reverseMat = new THREE.MeshStandardMaterial({
+      color: 0x551111,
+      emissive: 0xff3322,
+      emissiveIntensity: 0,
+    });
+    const lampGeo = new THREE.BoxGeometry(0.03, 0.05, 0.07);
+    for (const lz of [0.12, -0.12]) {
+      const lamp = new THREE.Mesh(lampGeo, this.reverseMat);
+      lamp.position.set(-0.31, 0.24, lz);
+      this.group.add(lamp);
+    }
 
     // ── wheels (axle along ±Z) ───────────────────────────────────────────
     // Front wheels (+X) hang under a steer pivot so they yaw when turning, like
@@ -189,27 +209,53 @@ export class Robot {
     /* no articulated head; the visor already marks forward */
   }
 
-  /** Fed each frame by PetScene: base linear speed + yaw rate (world units). */
+  /** Estimate path: PetScene feeds base linear speed + yaw rate (manual moves,
+   *  cat-follow). Steering is derived from v/ω in update(). */
   setDrive(v: number, omega: number) {
     this.driveV = v;
     this.driveOmega = omega;
+    this.steerOverride = null;
+  }
+
+  /** Profile path (§14.5): the backend controller's real output for this tick —
+   *  signed speed ``v`` (negative = reverse), yaw rate ``ω``, front-wheel angle
+   *  ``steer`` (rad, world convention) and ``gear``. Bypasses the v/ω estimate
+   *  so reverse and full-lock maneuvers render exactly as planned. */
+  setControl(v: number, omega: number, steer: number, gear: number) {
+    this.driveV = v;
+    this.driveOmega = omega;
+    this.steerOverride = steer;
+    this.gear = gear;
   }
 
   update(dt: number, _tMs: number) {
     // Differential wheel speeds: v_side = v ∓ ω·track/2, ω_wheel = v_side / r.
+    // A negative v rolls the wheels backwards — the reverse tell.
     const half = (this.driveOmega * TRACK_WIDTH) / 2;
     const dL = ((this.driveV - half) / WHEEL_RADIUS) * dt;
     const dR = ((this.driveV + half) / WHEEL_RADIUS) * dt;
     for (const w of this.wheels) w.mesh.rotation.z += w.isLeft ? dL : dR;
 
-    // Front-wheel steering (bicycle model): δ = atan(L·ω / v), clamped. A floor
-    // on v keeps a near-stationary pivot from saturating instantly; we lerp the
-    // angle so the wheels swing rather than snap.
-    const vRef = Math.max(Math.abs(this.driveV), 0.18);
-    let steer = Math.atan2(this.driveOmega * WHEELBASE, vRef) * STEER_SIGN;
-    steer = Math.max(-MAX_STEER, Math.min(MAX_STEER, steer));
+    // Front-wheel steering. With a backend profile we use its exact angle
+    // (mapped through the body's yaw convention); otherwise estimate from the
+    // bicycle relation δ = atan(L·ω / v) with a floor on v so a near-stationary
+    // pivot doesn't saturate instantly. Either way the angle is lerped so the
+    // wheels swing rather than snap.
+    let steer: number;
+    if (this.steerOverride !== null) {
+      steer = Math.max(-MAX_STEER, Math.min(MAX_STEER, this.steerOverride * STEER_SIGN));
+    } else {
+      const vRef = Math.max(Math.abs(this.driveV), 0.18);
+      steer = Math.atan2(this.driveOmega * WHEELBASE, vRef) * STEER_SIGN;
+      steer = Math.max(-MAX_STEER, Math.min(MAX_STEER, steer));
+    }
     this.steerAngle += (steer - this.steerAngle) * Math.min(1, dt * 9);
     for (const s of this.frontSteers) s.rotation.y = this.steerAngle;
+
+    // Reverse lights: glow when backing up (gear from profile, or v sign).
+    const reversing = this.steerOverride !== null ? this.gear < 0 : this.driveV < -0.02;
+    const target = reversing ? 1.4 : 0.0;
+    this.reverseMat.emissiveIntensity += (target - this.reverseMat.emissiveIntensity) * Math.min(1, dt * 10);
 
     // Subtle idle bob so a parked robot still feels alive.
     this.bobPhase += dt * 2;

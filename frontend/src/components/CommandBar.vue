@@ -7,6 +7,13 @@ const emit = defineEmits<{
   (e: "command-result", result: CommandResult): void;
 }>();
 
+// Robot Mode drives a car-like (Reeds-Shepp) path that reverses to square up;
+// the cat stays on the unicycle model. Forwarded to /command so the backend
+// picks the right kinematics for navigation commands.
+const props = withDefaults(defineProps<{ kinematics?: "unicycle" | "car" }>(), {
+  kinematics: "unicycle",
+});
+
 const text = ref("");
 
 function quick(action: PetAction) {
@@ -82,7 +89,7 @@ async function postCommand(t: string): Promise<void> {
     const resp = await fetch("/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: t }),
+      body: JSON.stringify({ text: t, kinematics: props.kinematics }),
     });
     // The movement/speech arrive over the WS stream; the JSON response carries
     // the grounding reasoning (intent, score breakdown, planner status) that the

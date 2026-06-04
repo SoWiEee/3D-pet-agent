@@ -44,7 +44,7 @@ watch(lastAction, (a: PetAction | null) => {
     const [x, y, z] = a.target_position_3d;
     scene.moveTo(x, y, z, a.speed ?? 0.8);
   } else if (a.action === "move_follow_path" && a.path) {
-    scene.followPath(a.path, a.speed ?? 0.35);
+    scene.followPath(a.path, a.speed ?? 0.35, a.motion_profile ?? null);
     if (a.exploration_goal) {
       const g = a.exploration_goal;
       scene.setExplorationGoal({
@@ -335,7 +335,11 @@ async function clearPlaced() {
       </div>
     </section>
 
-    <CommandBar @send="onCommand" @command-result="onCommandResult" />
+    <CommandBar
+      :kinematics="robotMode ? 'car' : 'unicycle'"
+      @send="onCommand"
+      @command-result="onCommandResult"
+    />
 
     <SpatialInsightsModal
       :open="insightsOpen"

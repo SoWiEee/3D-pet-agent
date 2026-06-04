@@ -83,6 +83,12 @@ class PetAction(BaseModel):
     target_object_id: str | None = None
     grasp: dict[str, Any] | None = None
     manipulation_actions: list[dict[str, Any]] | None = None
+    # Stage E car kinematics (§14.5): per-sample control profile for the robot
+    # avatar — ``[{x, z, theta, v, omega, gear, steer}, ...]``. When present the
+    # renderer drives the wheels from these *real* controller outputs (signed
+    # speed, yaw rate, steering, reverse gear) instead of estimating v/ω from
+    # frame-to-frame position. ``None`` ⇒ the cat's unicycle traversal.
+    motion_profile: list[dict[str, Any]] | None = None
     timestamp: float = Field(default_factory=time.time)
 
 
@@ -145,6 +151,7 @@ class PetRuntime:
         look_at_object_id: str | None = None,
         controller_trace: dict[str, Any] | None = None,
         exploration_goal: dict[str, Any] | None = None,
+        motion_profile: list[dict[str, Any]] | None = None,
     ) -> PetAction:
         """Walk along a planned path (spec §3.7 ``move_follow_path``).
 
@@ -171,6 +178,7 @@ class PetRuntime:
             state=self.state.model_copy(),
             controller_trace=controller_trace,
             exploration_goal=exploration_goal,
+            motion_profile=motion_profile,
         )
         self._broadcast(action)
         return action

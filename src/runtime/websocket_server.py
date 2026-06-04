@@ -24,7 +24,7 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,6 +32,9 @@ from pydantic import BaseModel
 
 from ..config import load_control, load_navigation
 from ..control import (
+    CarFollowerConfig,
+    CarPathFollower,
+    CarState,
     PathFollower,
     PIDController,
     PurePursuitController,
@@ -52,6 +55,8 @@ from ..planning import (
     PlannerConfig,
 )
 from ..research.manipulation import ArmConfig, plan_pick_and_place, top_down_grasp_goal
+from ..research.metric_map import MetricMapConfig, MetricOccupancyMap, simulate_scan
+from ..research.ros_bridge import Nav2Bridge, Nav2BridgeConfig, RecordingTransport
 from ..spatial import SceneGraphBuilder, SemanticMap
 from ..spatial.object_lifter import ObjectConfidence, ObjectState3D
 from ..tracking import Tracker
@@ -115,6 +120,44 @@ path_follower = PathFollower(
     max_steps=_ctrl_cfg.kinematic.max_steps,
     goal_tolerance=_ctrl_cfg.pure_pursuit.goal_tolerance,
 )
+
+# ── §14.5 car kinematics: Reeds-Shepp path follower for the robot avatar ────
+# A `kinematics="car"` command (the frontend sends this in Robot Mode) plans a
+# car-like path that reverses to square up, instead of the cat's in-place pivot.
+car_follower = CarPathFollower(
+    CarFollowerConfig(
+        wheelbase=_ctrl_cfg.car.wheelbase,
+        max_steer=_ctrl_cfg.car.max_steer,
+        v_max=_ctrl_cfg.car.v_max,
+        speed=_ctrl_cfg.car.speed,
+        dt=_ctrl_cfg.car.dt,
+    )
+)
+# PetState carries no heading, so the car follower remembers the robot's last
+# heading server-side to plan the next maneuver from a consistent pose. Facing
+# +X (heading 0) is the renderer's default spawn orientation.
+_robot_theta = 0.0
+
+# ── §14.5 Stage B: live metric (log-odds) occupancy map ─────────────────────
+# Fused from simulated range scans on each perception push, so the SLAM-grade
+# occupancy layer fills in as the robot observes the scene. The grid mirrors the
+# navigation grid extent so its cells align 1:1 with the binary world the scans
+# are cast against. Exposed at /slam/metric_map; planner fusion is opt-in.
+metric_map = MetricOccupancyMap(
+    MetricMapConfig(
+        resolution=_nav_cfg.grid.resolution,
+        origin_x=_nav_cfg.grid.origin_x,
+        origin_z=_nav_cfg.grid.origin_z,
+        width=_nav_cfg.grid.width,
+        height=_nav_cfg.grid.height,
+    )
+)
+
+# ── §14.5 Stage A: Nav2 bridge ──────────────────────────────────────────────
+# Each NavigationGoal round-trips to a frame-correct PoseStamped and the
+# controller's cmd_vel stream integrates back to a world trajectory, all via a
+# RecordingTransport (no live ROS graph). Exposed at /nav2/last.
+nav2_bridge = Nav2Bridge(RecordingTransport(), config=Nav2BridgeConfig())
 
 # Sticky last trace for debug overlay.
 _last_trace_summary: dict[str, Any] | None = None
@@ -368,6 +411,10 @@ async def push_lifted(payload: dict[str, Any]) -> dict[str, Any]:
     tracked = tracker.update(detections, frame_id)
     semantic_map.update(tracked, frame_id)
 
+    # Stage B (§14.5): fold a simulated range scan from the robot's pose into the
+    # log-odds metric map, so the SLAM occupancy layer accretes as we observe.
+    _update_metric_map()
+
     markers = _map_to_markers(semantic_map)
     graph = scene_graph_builder.build(semantic_map, frame_id=frame_id)
     action = PetAction(
@@ -384,6 +431,19 @@ async def push_lifted(payload: dict[str, Any]) -> dict[str, Any]:
         "map_size": len(markers),
         "relations": len(graph.relations),
     }
+
+
+def _update_metric_map() -> None:
+    """Stage B (§14.5): cast a synthetic 360° scan of the current obstacles from
+    the robot's pose and fuse it into the log-odds map. In a hardware build a
+    real ``sensor_msgs/LaserScan`` replaces ``simulate_scan`` here — the rest of
+    the log-odds pipeline is identical."""
+    from ..planning import build_occupancy_grid
+
+    world = build_occupancy_grid(semantic_map, cfg=planner.cfg.grid)
+    pose = (runtime.state.position.x, runtime.state.position.z, _robot_theta)
+    scan = simulate_scan(world, pose, n_beams=180, fov=2 * math.pi, max_range=5.0)
+    metric_map.integrate(scan)
 
 
 @app.get("/semantic/map")
@@ -407,6 +467,45 @@ async def get_occupancy_grid() -> dict[str, Any]:
 
     grid = build_occupancy_grid(semantic_map, cfg=planner.cfg.grid)
     return grid.to_dict()
+
+
+@app.get("/slam/metric_map")
+async def get_metric_map() -> dict[str, Any]:
+    """Stage B (§14.5): the live log-odds occupancy map as a trinary grid
+    (0 free / 1 occupied / -1 unknown) plus per-cell probabilities, for the
+    SLAM ground overlay."""
+    klass = metric_map.classify()
+    cfg = metric_map.cfg
+    return {
+        "resolution": cfg.resolution,
+        "origin_x": cfg.origin_x,
+        "origin_z": cfg.origin_z,
+        "width": cfg.width,
+        "height": cfg.height,
+        "classes": klass.astype(int).tolist(),
+        "occupied_cells": int((klass == 1).sum()),
+        "free_cells": int((klass == 0).sum()),
+        "unknown_cells": int((klass == -1).sum()),
+    }
+
+
+@app.get("/nav2/last")
+async def get_nav2_last() -> dict[str, Any]:
+    """Stage A (§14.5): the most recent NavigationGoal published to Nav2 as a
+    ``geometry_msgs/PoseStamped`` (frame ``map``), with the bridge's integrated
+    pose. Proves the ROS goal contract round-trips without a live graph."""
+    transport = nav2_bridge.transport
+    goals = getattr(transport, "published_goals", [])
+    return {
+        "transport": type(transport).__name__,
+        "goals_published": len(goals),
+        "last_goal": goals[-1] if goals else None,
+        "integrated_pose_world": {
+            "x": nav2_bridge.state.x,
+            "z": nav2_bridge.state.y,
+            "theta": nav2_bridge.state.theta,
+        },
+    }
 
 
 class SaveSemanticMapRequest(BaseModel):
@@ -526,6 +625,10 @@ async def editor_delete_object(object_id: str) -> dict[str, Any]:
 
 class CommandRequest(BaseModel):
     text: str
+    # Renderer kinematics for this command. The frontend sends "car" in Robot
+    # Mode so the move plans a Reeds-Shepp path (reverses to square up) instead
+    # of the cat's unicycle pivot. Defaults to the cat's model.
+    kinematics: Literal["unicycle", "car"] = "unicycle"
 
 
 def _reasoning_fields(result: Any) -> dict[str, Any]:
@@ -682,31 +785,36 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
             **_reasoning_fields(result),
         }
 
-    # Phase 8: run the offline pure-pursuit simulator over the planner's
-    # waypoints so the renderer receives a dense, dynamically-feasible
-    # trajectory rather than chunky LOS-pruned segments. The cat's heading
-    # comes from the first non-degenerate segment of the planner path (no
-    # heading is carried in PetState today; this is a deliberate trade-off
-    # so the controller stays stateless across commands).
-    initial = _initial_state_from_plan(plan.path_world)
-    trace = path_follower.simulate(plan.path_world, initial)
+    # Phase 8 / §14.5: densify the planner's waypoints into a dynamically
+    # feasible trajectory. The cat uses the unicycle pure-pursuit simulator
+    # (can pivot in place); Robot Mode (`kinematics="car"`) plans a Reeds-Shepp
+    # car path that reverses to square up its heading on the target.
     global _last_trace_summary
-    _last_trace_summary = _trace_summary_dict(trace.summary, plan.path_world)
-    runtime.move_follow_path(
-        trace.path_world,
-        speed=_ctrl_cfg.pure_pursuit.base_speed,
-        look_at_object_id=goal.target_object_id,
-        controller_trace=_last_trace_summary,
-    )
+    if req.kinematics == "car" and _ctrl_cfg.car.enabled:
+        final_xz, control_steps, control_status = _drive_car(goal, plan)
+    else:
+        initial = _initial_state_from_plan(plan.path_world)
+        trace = path_follower.simulate(plan.path_world, initial)
+        _last_trace_summary = _trace_summary_dict(trace.summary, plan.path_world)
+        runtime.move_follow_path(
+            trace.path_world,
+            speed=_ctrl_cfg.pure_pursuit.base_speed,
+            look_at_object_id=goal.target_object_id,
+            controller_trace=_last_trace_summary,
+        )
+        final_xz = (trace.path_world[-1][0], trace.path_world[-1][2])
+        control_steps, control_status = trace.summary.steps, trace.summary.status
+
     response = {
         "parsed": True,
         "intent": intent.model_dump(),
         "status": result.status,
         "goal": goal.model_dump(),
         "planner_status": plan.status,
+        "kinematics": req.kinematics,
         "path_waypoints": len(plan.path_world),
-        "control_steps": trace.summary.steps,
-        "control_status": trace.summary.status,
+        "control_steps": control_steps,
+        "control_status": control_status,
         **_reasoning_fields(result),
     }
 
@@ -716,8 +824,10 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
     if intent.intent_type == "pick_up" and goal.target_object_id is not None:
         # The arm is mounted on the base, which arrives next to the object, so
         # reach is evaluated from the robot's final pose (not the world origin).
-        ax, _ay, az = trace.path_world[-1]
-        pick = _synthesize_pick(goal.target_object_id, (ax, 0.3, az))
+        arm_base = (final_xz[0], _ctrl_cfg.manipulation.arm_base_height, final_xz[1])
+        pick = _synthesize_pick(
+            goal.target_object_id, arm_base, _ctrl_cfg.manipulation.min_grasp_confidence
+        )
         if pick is not None:
             grasp_dict, actions = pick
             runtime.pick_object(goal.target_object_id, grasp_dict, actions)
@@ -727,6 +837,74 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
             response["pick"] = {"feasible": False}
 
     return response
+
+
+def _drive_car(goal: Any, plan: Any) -> tuple[tuple[float, float], int, str]:
+    """§14.5 car kinematics: plan a Reeds-Shepp path from the robot's remembered
+    pose to the planner's (obstacle-aware) standoff, facing the target, and
+    broadcast it with the real per-sample control profile. Also publishes the
+    goal to Nav2 (Stage A). Returns ``((x, z), n_samples, status)``."""
+    global _last_trace_summary, _robot_theta
+
+    gx, _gy, gz = plan.path_world[-1]
+    theta_goal = _robot_theta
+    if goal.target_position_world is not None:
+        tx, _ty, tz = goal.target_position_world
+        if math.hypot(tx - gx, tz - gz) > 1e-6:
+            theta_goal = math.atan2(tz - gz, tx - gx)
+    elif len(plan.path_world) >= 2:
+        px, _py, pz = plan.path_world[-2]
+        theta_goal = math.atan2(gz - pz, gx - px)
+
+    start = CarState(x=runtime.state.position.x, y=runtime.state.position.z, theta=_robot_theta)
+    car_trace = car_follower.simulate(start, (gx, gz, theta_goal))
+    if car_trace.samples:
+        _robot_theta = car_trace.samples[-1].theta
+
+    # Stage A (§14.5): round-trip the NavigationGoal to a Nav2 PoseStamped.
+    nav2_bridge.send_goal(goal, yaw=theta_goal)
+
+    _last_trace_summary = {
+        "kinematics": "car",
+        "status": car_trace.status,
+        "steps": len(car_trace.samples),
+        "length_m": round(car_trace.length, 3),
+        "n_reversals": car_trace.n_reversals,
+        "turning_radius_m": round(car_follower.turning_radius, 3),
+        "path": [list(p) for p in car_trace.path_world],
+    }
+    runtime.move_follow_path(
+        car_trace.path_world,
+        speed=_ctrl_cfg.car.speed,
+        look_at_object_id=goal.target_object_id,
+        controller_trace=_last_trace_summary,
+        motion_profile=_downsample_profile(car_trace.samples),
+    )
+    final = car_trace.path_world[-1]
+    return (final[0], final[2]), len(car_trace.samples), car_trace.status
+
+
+def _downsample_profile(samples: list[Any], max_points: int = 160) -> list[dict[str, Any]]:
+    """Thin the per-tick control samples to a renderer-friendly profile,
+    always keeping the final sample so the wheels settle on the goal."""
+    if not samples:
+        return []
+    stride = max(1, len(samples) // max_points)
+    picked = samples[::stride]
+    if picked[-1] is not samples[-1]:
+        picked.append(samples[-1])
+    return [
+        {
+            "x": round(s.x, 4),
+            "z": round(s.z, 4),
+            "theta": round(s.theta, 4),
+            "v": round(s.v, 4),
+            "omega": round(s.omega, 4),
+            "gear": s.gear,
+            "steer": round(s.steer, 4),
+        }
+        for s in picked
+    ]
 
 
 def _execute_exploration_goal(intent: Any, ex_goal: ExplorationGoal) -> dict[str, Any]:

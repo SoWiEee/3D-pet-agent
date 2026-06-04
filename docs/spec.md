@@ -1035,7 +1035,10 @@ sees a ROS type.
   drives the tests without ROS installed; an `RclpyTransport` (lazy `rclpy`
   import) drops in for the live graph. Our global A* may either feed Nav2 as a
   goal source or be deferred to Nav2's own global+local planners — the bridge
-  only commits to the goal/cmd_vel contract.
+  only commits to the goal/cmd_vel contract. **Wired live:** the websocket
+  server holds a process-wide `Nav2Bridge(RecordingTransport())`; every
+  `kinematics="car"` command publishes its `NavigationGoal` as a frame-`map`
+  `PoseStamped` (yaw = the approach heading), inspectable at `GET /nav2/last`.
 - **Stage B — real SLAM + sensors** _(metric layer implemented:
   `src/research/metric_map.py`)_. `MetricOccupancyMap` is a log-odds
   occupancy grid fused from range scans (`RangeScan`) by ray-casting each beam
@@ -1046,9 +1049,14 @@ sees a ROS type.
   `unknown_is_blocked` toggle for conservative planning). `simulate_scan`
   casts synthetic beams against any binary grid so the mapper round-trips
   offline; a real `sensor_msgs/LaserScan` (via Stage A's bridge) fills a
-  `RangeScan` instead. **Still TODO:** swap ORB-VO (§14.1) for ORB-SLAM3 /
-  Nav2 AMCL for drift-free *localisation* — the metric mapping half is done,
-  the SLAM-grade pose half is not.
+  `RangeScan` instead. **Wired live:** each `/perception/lifted` push casts a
+  synthetic 360° scan from the robot pose and fuses it into a process-wide
+  metric map (grid extent mirrors the navigation grid), so the SLAM occupancy
+  layer accretes as the scene is observed; serialised at `GET /slam/metric_map`.
+  **Still TODO:** swap ORB-VO (§14.1) for ORB-SLAM3 / Nav2 AMCL for drift-free
+  *localisation* — the metric mapping half is done, the SLAM-grade pose half is
+  not; and planner fusion of the metric layer is off by default so a partly
+  observed map can't strand the demo.
 - **Stage C — arm + MoveIt2** _(planning implemented:
   `src/research/manipulation.py`)_. The manipulation pipeline mirrors the
   navigation one: `top_down_grasp_goal` synthesises an explainable `GraspGoal`
@@ -1081,13 +1089,30 @@ sees a ROS type.
   routes the existing `move_follow_path` traversal to whichever avatar is
   active; a **Robot Mode** UI toggle (`PetScene.setMode('cat'|'robot')`) keeps
   the cat demo intact.
-  - **Differential wheel animation:** during path-following `PetScene`
-    estimates linear speed `v` (Δposition/Δt) and yaw rate `ω` (Δheading/Δt)
-    each frame and rolls each wheel from the diff-drive relation
-    `v_left = v − ω·track/2`, `v_right = v + ω·track/2`,
-    `ω_wheel = v_side / r`. Outer wheels spin faster on a turn, inner wheels
-    can counter-rotate on a tight pivot — grounded in the same unicycle model
-    `control/` already uses, not a faked spin.
+  - **Car kinematics (Reeds-Shepp):** in Robot Mode the frontend sends
+    `kinematics="car"` on each navigation command, and `/command` plans the
+    drive with a **front-steered car** instead of the cat's unicycle. A finite
+    wheelbase + steering limit (`configs/control.yaml::car`) set a minimum
+    turning radius `R = L / tan(δ_max)`, so the robot cannot pivot in place; it
+    drives the shortest **Reeds-Shepp** path (`control/reeds_shepp.py`) from its
+    remembered pose to the planner's standoff, facing the target — **reversing
+    to square up** ("倒車喬角度") whenever the approach is too tight for forward
+    arcs. The planner is the analytic OMPL word set (CSC/CCC/CCCC/CCSC/CCSCC)
+    with every candidate verified by reconstruction, so only geometrically
+    correct words survive. `control/car_follower.py` densifies the word into a
+    per-tick trace carrying the **real** control `(x, z, θ, v, ω, gear, steer)`.
+    *Obstacle-aware car planning (Hybrid-A* with RS as the steering primitive)
+    is the noted extension; the current planner connects start→standoff and
+    relies on the open demo scene.*
+  - **Differential wheel animation:** the trace's downsampled `motion_profile`
+    rides on the `move_follow_path` broadcast, and `PetScene.followProfile`
+    replays it at constant rate — driving each wheel from the **actual**
+    controller output (`v_left = v − ω·track/2`, `v_right = v + ω·track/2`,
+    `ω_wheel = v_side / r`), the front wheels to the backend steering angle, and
+    glowing reverse lights while `v < 0`. Chassis heading comes from the
+    profile's `θ`, so a reverse segment keeps the car facing its travel-forward
+    direction while moving backward. With no profile (a manual move) it falls
+    back to the old Δposition/Δheading estimate.
   - **Pick visualization:** the command `pick up the X` / `grab the X` parses
     to a new `pick_up` `IntentType`; `/command` grounds + plans navigation to
     the object (reusing `move_to` standoff logic), then synthesises the grasp
@@ -1111,6 +1136,12 @@ sees a ROS type.
 - `pick_object` (`PetAction`): `{ target_object_id, grasp, manipulation_actions
   }` — the Stage-E broadcast that hands a synthesised pick sequence to the
   browser robot avatar.
+- `motion_profile` (`PetAction`, car kinematics): `[{ x, z, theta, v, omega,
+  gear, steer }, ...]` — the downsampled per-tick control profile riding on a
+  car `move_follow_path`, so the renderer drives wheels/steering/reverse from
+  the real controller output rather than estimating from position deltas.
+- `kinematics` (`/command` request): `"unicycle" | "car"` — the renderer model
+  for this command; Robot Mode sends `"car"` to get a Reeds-Shepp drive.
 
 **Acceptance (Stage A):** a recorded `NavigationGoal` round-trips to a
 frame-correct goal pose, and a synthetic `/cmd_vel` stream integrates to the

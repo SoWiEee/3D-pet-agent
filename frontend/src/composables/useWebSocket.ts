@@ -155,7 +155,21 @@ export interface PetAction {
   target_object_id?: string | null;
   grasp?: GraspPayload | null;
   manipulation_actions?: ManipulationActionPayload[] | null;
+  // §14.5 car kinematics: per-sample control profile for the robot avatar.
+  // When present the renderer drives the wheels/steering/reverse from these
+  // real controller outputs instead of estimating from position deltas.
+  motion_profile?: MotionSample[] | null;
   timestamp?: number;
+}
+
+export interface MotionSample {
+  x: number;
+  z: number;
+  theta: number; // chassis heading (rad, CCW from +X) — independent of gear
+  v: number; // signed linear speed (m/s); < 0 = reverse
+  omega: number; // yaw rate (rad/s)
+  gear: number; // +1 forward, -1 reverse
+  steer: number; // front-wheel angle (rad), signed
 }
 
 export interface GraspPayload {

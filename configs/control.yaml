@@ -28,3 +28,20 @@ preempt:
   # window. The renderer is responsible for honouring the most-recent
   # move_follow_path it received.
   max_latency_s: 0.10
+
+car:
+  # Car-like (bicycle) kinematics for the robot avatar — spec §14.5. A finite
+  # wheelbase + steering limit give a minimum turning radius R = L / tan(δ_max),
+  # so the robot drives Reeds-Shepp paths and reverses to square up rather than
+  # pivoting in place like the cat.
+  enabled: true
+  wheelbase: 0.44      # m — front-rear axle separation
+  max_steer: 0.55      # rad (~31°) — front-wheel steering limit → R ≈ 0.69 m
+  v_max: 0.80          # m/s
+  speed: 0.45          # m/s — cruise magnitude along the path
+  dt: 0.05             # s — densification step
+
+manipulation:
+  # Arm / grasp parameters for the live pick path (spec §14.5 Stage C/E).
+  arm_base_height: 0.30        # m — shoulder height above the floor on arrival
+  min_grasp_confidence: 0.20   # below this the pick is refused (speech, no teleport)

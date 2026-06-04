@@ -154,11 +154,36 @@ class PreemptConfig(BaseModel):
     max_latency_s: float = 0.10
 
 
+class CarConfig(BaseModel):
+    """Car-like (bicycle) kinematics for the robot avatar — spec §14.5.
+
+    Distinct from the unicycle ``kinematic`` block: a finite ``wheelbase`` and
+    ``max_steer`` give a non-zero minimum turning radius, so the robot drives
+    Reeds-Shepp paths (and reverses to square up) instead of pivoting in place.
+    """
+
+    enabled: bool = True
+    wheelbase: float = 0.44  # m — front-rear axle separation
+    max_steer: float = 0.55  # rad (~31°) — front-wheel steering limit
+    v_max: float = 0.80  # m/s
+    speed: float = 0.45  # m/s — cruise magnitude along the path
+    dt: float = 0.05  # s — densification step
+
+
+class ManipulationConfig(BaseModel):
+    """Arm/grasp parameters for the live pick path — spec §14.5 Stage C/E."""
+
+    arm_base_height: float = 0.30  # m — shoulder height above the floor on arrival
+    min_grasp_confidence: float = 0.20  # below this, the pick is refused (speech)
+
+
 class ControlConfig(BaseModel):
     kinematic: KinematicConfig = Field(default_factory=KinematicConfig)
     pure_pursuit: PurePursuitConfig = Field(default_factory=PurePursuitConfig)
     speed_pid: SpeedPIDConfig = Field(default_factory=SpeedPIDConfig)
     preempt: PreemptConfig = Field(default_factory=PreemptConfig)
+    car: CarConfig = Field(default_factory=CarConfig)
+    manipulation: ManipulationConfig = Field(default_factory=ManipulationConfig)
 
 
 class Settings(BaseSettings):
