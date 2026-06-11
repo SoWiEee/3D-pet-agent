@@ -42,6 +42,11 @@ track = [
     # supervision is already a core dep; this extra signals "tracking opt-in".
     "supervision>=0.25,<0.30",
 ]
+rl = [
+    "gymnasium>=1.0",
+    "stable-baselines3>=2.7",
+    "sb3-contrib>=2.7",
+]
 
 [tool.ruff]
 line-length = 100
