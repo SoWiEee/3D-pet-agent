@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from ..spatial.object_lifter import ObjectState3D
 from .tracker import Tracker
+
+if TYPE_CHECKING:
+    from ..config import TrackingThresholds
 
 log = logging.getLogger("pet_agent.tracking")
 
@@ -31,10 +34,10 @@ class TrackerBackend(Protocol):
     def reset(self) -> None: ...
 
     @property
-    def active_tracks(self) -> dict: ...
+    def active_tracks(self) -> dict[str, object]: ...
 
 
-def make_tracker(cfg) -> TrackerBackend:  # cfg: TrackingThresholds
+def make_tracker(cfg: TrackingThresholds) -> TrackerBackend:
     """Build the configured tracker. ``PET_AGENT_TRACKER`` env overrides
     ``cfg.backend``. Unknown names or a failed ByteTrack import → greedy."""
     choice = (os.environ.get("PET_AGENT_TRACKER") or cfg.backend or "").strip().lower()
@@ -44,6 +47,8 @@ def make_tracker(cfg) -> TrackerBackend:  # cfg: TrackingThresholds
             from .bytetrack_adapter import ByteTrackTracker
 
             return ByteTrackTracker(
+                # The high/low ByteTrack split threshold. TODO: promote to a
+                # cfg.high_confidence field if §14.6.x needs it tunable.
                 high_confidence=0.5,
                 persistence_frames=cfg.persistence_frames,
                 min_iou=cfg.min_iou,

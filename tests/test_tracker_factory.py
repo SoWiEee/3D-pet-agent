@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from src.config import TrackingThresholds
-from src.tracking import Tracker, make_tracker
+from src.tracking import Tracker, TrackerBackend, make_tracker
 
 
 def test_default_backend_returns_greedy_tracker() -> None:
@@ -23,3 +23,10 @@ def test_env_override_selects_greedy(monkeypatch) -> None:
     cfg = TrackingThresholds(backend="supervision_bytetrack")
     t = make_tracker(cfg)
     assert isinstance(t, Tracker)
+
+
+def test_greedy_tracker_satisfies_protocol() -> None:
+    # The runtime-checkable Protocol structurally validates the backend surface
+    # (update / reset / active_tracks) the perception loop depends on.
+    t = make_tracker(TrackingThresholds())
+    assert isinstance(t, TrackerBackend)
