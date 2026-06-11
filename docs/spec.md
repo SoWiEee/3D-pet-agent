@@ -1193,7 +1193,13 @@ gates on a heavy dependency.
   image-plane association for ID assignment; the lifter's 3D centre is attached
   to each surviving track afterwards, so SemanticMap (keyed by `track_id`) is
   untouched. `sv` tracker ids map to stable `track_NNN`.
-- **Config:** `PET_AGENT_TRACKER ∈ {greedy, bytetrack}` (default `greedy`).
+- **Config:** env `PET_AGENT_TRACKER ∈ {greedy, bytetrack}` overrides
+  `thresholds.tracking.backend` (default `"simple_iou_then_bytetrack"`, which —
+  like any non-bytetrack value — resolves to the greedy `Tracker`); set it to
+  `"supervision_bytetrack"` (or `bytetrack`) for the real backend.
+- **Dependency caveat:** `supervision.ByteTrack` is deprecated in 0.28 and
+  removed in 0.30, so the dep is pinned `<0.30`; migrating `ByteTrackTracker` to
+  the standalone `trackers` package is the follow-up before that cap is lifted.
 - **Acceptance:** on a seeded multi-object occlusion sequence, ID switches ≤ the
   greedy baseline and IDF1 does not regress.
 - **Status — implemented:** `tracking/bytetrack_adapter.py` (`ByteTrackTracker`,

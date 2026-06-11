@@ -23,7 +23,10 @@ dependencies = [
     "opencv-python>=4.10",
     "pillow>=10.4",
     "numpy>=1.26,<2.2",
-    "supervision>=0.24",
+    # <0.30: supervision deprecates ByteTrack in 0.28 and removes it in 0.30;
+    # migrate ByteTrackTracker to the `trackers` package before lifting this cap
+    # (spec §14.6.1).
+    "supervision>=0.24,<0.30",
     "scipy>=1.13",
     "matplotlib>=3.9",
 ]
@@ -36,7 +39,8 @@ dev = [
     "httpx>=0.27",
 ]
 track = [
-    "supervision>=0.25",
+    # supervision is already a core dep; this extra signals "tracking opt-in".
+    "supervision>=0.25,<0.30",
 ]
 
 [tool.ruff]
