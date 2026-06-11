@@ -30,3 +30,15 @@ def test_greedy_tracker_satisfies_protocol() -> None:
     # (update / reset / active_tracks) the perception loop depends on.
     t = make_tracker(TrackingThresholds())
     assert isinstance(t, TrackerBackend)
+
+
+def test_bytetrack_backend_builds_adapter_when_available(monkeypatch) -> None:
+    import pytest
+
+    pytest.importorskip("supervision")
+    monkeypatch.delenv("PET_AGENT_TRACKER", raising=False)
+    from src.tracking.bytetrack_adapter import ByteTrackTracker
+
+    cfg = TrackingThresholds(backend="supervision_bytetrack")
+    t = make_tracker(cfg)
+    assert isinstance(t, ByteTrackTracker)

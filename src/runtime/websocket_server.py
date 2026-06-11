@@ -30,7 +30,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from ..config import load_control, load_navigation
+from ..config import load_control, load_navigation, load_thresholds
 from ..control import (
     CarFollowerConfig,
     CarPathFollower,
@@ -59,7 +59,7 @@ from ..research.metric_map import MetricMapConfig, MetricOccupancyMap, simulate_
 from ..research.ros_bridge import Nav2Bridge, Nav2BridgeConfig, RecordingTransport
 from ..spatial import SceneGraphBuilder, SemanticMap
 from ..spatial.object_lifter import ObjectConfidence, ObjectState3D
-from ..tracking import Tracker
+from ..tracking import make_tracker
 from .pet_runtime import PetAction, PetRuntime
 
 log = logging.getLogger("pet_agent.ws")
@@ -70,7 +70,7 @@ runtime = PetRuntime()
 # fuses into the map, rebuilds the scene graph, broadcasts both to the
 # renderer; user utterances POSTed to /command parse → ground → plan →
 # emit move_follow_path (or move_to if planner has no goal cell).
-tracker = Tracker()
+tracker = make_tracker(load_thresholds().tracking)
 semantic_map = SemanticMap(map_id="live")
 scene_graph_builder = SceneGraphBuilder()
 grounding_resolver = GroundingResolver()
