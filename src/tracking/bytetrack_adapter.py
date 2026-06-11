@@ -26,6 +26,21 @@ for 3-D smoothing.
 All imports happen inside ``__init__`` so that a missing or incompatible
 ``supervision`` install is caught by ``protocol.make_tracker``'s try/except and
 falls back to the greedy tracker transparently.
+
+**active_tracks pruning**: ``active_tracks`` reflects only the slugs emitted
+by the *most recent* ``update()`` call.  A slug that ByteTrack no longer
+returns for the current frame is immediately removed from the live set.  This
+mirrors the greedy ``Tracker``'s behaviour (which prunes after
+``persistence_frames`` consecutive misses) and keeps the docstring contract
+("currently-live") true.  Note that ByteTrack itself still buffers lost tracks
+internally for up to ``persistence_frames`` frames; the pruning here is on the
+*adapter's* view of what is live, not inside the ByteTrack core.
+
+**Robust box→input mapping**: instead of a round-then-dict lookup (which
+silently drops duplicate same-class boxes that round to the same key), each
+ByteTrack-returned box is matched to the *nearest* unmatched input box by L2
+distance in xyxy space.  Boxes farther than 5.0 pixels are rejected (see
+``_nearest_input``).  Each input index is consumed at most once.
 """
 
 from __future__ import annotations
@@ -33,6 +48,9 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+import numpy as np
+import numpy.typing as npt
 
 if TYPE_CHECKING:
     from ..spatial.object_lifter import ObjectState3D
@@ -105,7 +123,8 @@ class ByteTrackTracker:
         # slug registry: (class_label, sv_tracker_id) → "track_NNN"
         self._slug_map: dict[tuple[str, int], str] = {}
 
-        # lightweight per-track metadata
+        # lightweight per-track metadata — reflects only the most-recent frame's
+        # live tracks (pruned at the start of each update call).
         self._tracks: dict[str, _LiteTrack] = {}
 
         # instance-local id counter (reset on .reset())
@@ -124,7 +143,11 @@ class ByteTrackTracker:
 
     @property
     def active_tracks(self) -> dict[str, _LiteTrack]:
-        """Snapshot of currently-live tracks keyed by stable slug."""
+        """Snapshot of currently-live tracks keyed by stable slug.
+
+        Only slugs emitted by the most recent ``update()`` call are present.
+        A slug disappears immediately when ByteTrack stops returning it.
+        """
         return dict(self._tracks)
 
     def update(
@@ -142,8 +165,12 @@ class ByteTrackTracker:
         The returned ``ObjectState3D`` copies are identical to the input except
         for ``object_id``, which is rewritten to a stable ``track_NNN`` slug.
         The original ``center_3d_world`` is preserved unchanged.
+
+        ``active_tracks`` is rebuilt from scratch on every call so it only
+        contains the slugs that ByteTrack returned this frame.
         """
-        import numpy as np
+        # Rebuild live-track set from scratch each frame (Fix 1: pruning).
+        self._tracks = {}
 
         if not detections:
             return []
@@ -175,34 +202,30 @@ class ByteTrackTracker:
 
             sv_dets = self._Dets(xyxy=xyxy, confidence=conf, class_id=cls_id)
 
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", FutureWarning)
-                result = bt.update_with_detections(sv_dets)  # type: ignore[union-attr]
+            # No catch_warnings here — suppression belongs only around construction
+            # (Fix 3: the FutureWarning fires on ByteTrack.__init__, not on update).
+            result = bt.update_with_detections(sv_dets)  # type: ignore[union-attr]
 
             if len(result) == 0:
                 continue
 
-            # Build a lookup: rounded-xyxy tuple → input index.
-            key_to_input_idx: dict[tuple, int] = {
-                tuple(np.round(xyxy[j], 3)): indices[j] for j in range(len(indices))
-            }
+            # Fix 2: robust box→input mapping via nearest-unmatched-box search.
+            # Track which input indices have already been claimed so two ByteTrack
+            # results cannot map to the same input.
+            consumed: set[int] = set()
 
             for k in range(len(result)):
-                sv_box = tuple(np.round(result.xyxy[k], 3))
                 sv_tid = int(result.tracker_id[k])
 
                 if sv_tid < 0:
                     continue  # ByteTrack not yet confident about this track.
 
-                input_idx = key_to_input_idx.get(sv_box)
-                if input_idx is None:
-                    # ByteTrack occasionally adjusts boxes slightly via the
-                    # Kalman filter; fall back to nearest-xyxy lookup.
-                    input_idx = self._nearest_input(result.xyxy[k], xyxy, indices)
+                input_idx = self._nearest_input(result.xyxy[k], xyxy, indices, consumed)
 
                 if input_idx is None:
                     continue
 
+                consumed.add(input_idx)
                 slug = self._mint_slug(label, sv_tid)
                 det = detections[input_idx]
                 self._tracks[slug] = _LiteTrack(
@@ -241,15 +264,29 @@ class ByteTrackTracker:
 
     @staticmethod
     def _nearest_input(
-        sv_box: object,
-        xyxy: object,
+        sv_box: npt.NDArray[np.float64],
+        xyxy: npt.NDArray[np.float64],
         indices: list[int],
+        consumed: set[int],
     ) -> int | None:
-        """Fall back to the closest input box by L2 distance in xyxy space."""
-        import numpy as np
+        """Return the closest *unconsumed* input index by L2 distance in xyxy space.
 
-        sv_box = np.asarray(sv_box, dtype=np.float32)
+        Boxes whose nearest match exceeds 5.0 px in L2 xyxy distance are rejected
+        — this fence tolerates Kalman-filter coordinate nudges while preventing
+        cross-object mis-assignment when detections are far apart.
+        """
+        # 5.0 px L2 rejection fence: tolerates Kalman nudges, blocks mis-assignment.
+        _REJECT_DISTANCE = 5.0
+
+        sv_box_arr = np.asarray(sv_box, dtype=np.float32)
         xyxy_arr = np.asarray(xyxy, dtype=np.float32)
-        dists = np.linalg.norm(xyxy_arr - sv_box, axis=1)
-        best = int(np.argmin(dists))
-        return indices[best] if dists[best] < 5.0 else None
+        dists = np.linalg.norm(xyxy_arr - sv_box_arr, axis=1)
+
+        # Sort candidates by distance; skip already-consumed indices.
+        order = np.argsort(dists)
+        for pos in order:
+            candidate_idx = indices[int(pos)]
+            if candidate_idx not in consumed and dists[pos] < _REJECT_DISTANCE:
+                return candidate_idx
+
+        return None

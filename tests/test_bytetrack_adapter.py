@@ -103,3 +103,34 @@ def test_low_confidence_only_detection_is_not_emitted_as_new_track() -> None:
         frame_id=0,
     )
     assert out == []
+
+
+def test_active_tracks_drops_disappeared_object() -> None:
+    """active_tracks must reflect only the most-recent frame's live tracks.
+
+    Pruning rule: ``self._tracks`` is rebuilt from scratch at the top of each
+    ``update()`` call. A slug that ByteTrack no longer returns for the current
+    frame is immediately absent from ``active_tracks``, regardless of
+    ``persistence_frames``. We use ``persistence_frames=1`` so ByteTrack's
+    internal buffer expires quickly; the adapter-level pruning is visible from
+    frame 1 onward (the very first empty-detection frame).
+    """
+    t = ByteTrackTracker(high_confidence=0.5, persistence_frames=1)
+
+    # Frame 0: cup is visible and tracked.
+    out0 = t.update(
+        [_obs("raw_a", "cup", (100, 100, 200, 200), (0.0, 0.0, -2.0), 0)],
+        frame_id=0,
+    )
+    assert len(out0) == 1, "cup should be tracked in frame 0"
+    cup_slug = out0[0].object_id
+    assert cup_slug in t.active_tracks, "cup slug must be in active_tracks after frame 0"
+
+    # Frames 1–3: no detections at all.  active_tracks must be empty from
+    # frame 1 onward because the adapter rebuilds _tracks from scratch each call.
+    for fid in range(1, 4):
+        t.update([], frame_id=fid)
+        assert cup_slug not in t.active_tracks, (
+            f"cup slug must not be in active_tracks after empty frame {fid}"
+        )
+    assert t.active_tracks == {}, "active_tracks must be empty after several empty frames"
