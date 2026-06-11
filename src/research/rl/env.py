@@ -53,6 +53,36 @@ R_COLLISION = -1.0
 R_REPEAT_FAILED = -0.5
 
 
+def reward_terms(
+    cfg: EnvConfig,
+    *,
+    new_area: int,
+    discovered_relevant: int,
+    verified_stale: int,
+    collided: bool,
+    is_move: bool,
+    failed_inspection: bool,
+    prev_failed: bool,
+) -> dict[str, float]:
+    """Spec §14.3 reward shaping, shared by the discrete and continuous envs.
+    Pure: depends only on per-step quantities + config so both action
+    parameterisations score identically and the A/B comparison stays fair."""
+    terms: dict[str, float] = {}
+    if collided:
+        terms["collision"] = R_COLLISION
+    if new_area > 0:
+        terms["area"] = R_REDUCED_AREA * min(1.0, new_area / cfg.area_norm)
+    if discovered_relevant:
+        terms["discover"] = R_DISCOVER_RELEVANT * discovered_relevant
+    if verified_stale:
+        terms["verify"] = R_VERIFY_STALE * verified_stale
+    if is_move and not collided and new_area < cfg.failed_area_cells and not discovered_relevant:
+        terms["move_cost"] = R_UNNECESSARY_MOVE
+    if failed_inspection and prev_failed:
+        terms["repeat_failed"] = R_REPEAT_FAILED
+    return terms
+
+
 @dataclass(frozen=True)
 class SceneObject:
     x: float
@@ -145,7 +175,6 @@ class ExplorationEnv:
         if self._done:
             raise RuntimeError("step() called on a finished episode; call reset()")
         self._steps += 1
-        terms: dict[str, float] = {}
 
         target, is_move, full_sweep = self._resolve_action(action)
         collided = False
@@ -159,8 +188,6 @@ class ExplorationEnv:
         else:
             if is_move and target is not None:
                 new_pos, collided = self._move_toward(self._cat, target)
-                if collided:
-                    terms["collision"] = R_COLLISION
                 if new_pos != self._cat:
                     self._heading = math.atan2(new_pos[1] - self._cat[1], new_pos[0] - self._cat[0])
                     self._cat = new_pos
@@ -172,25 +199,19 @@ class ExplorationEnv:
                     verified_stale = self._verify_stale_near(self._cat)
 
         # ── reward shaping (spec §14.3) ──
-        if new_area > 0:
-            terms["area"] = R_REDUCED_AREA * min(1.0, new_area / self.cfg.area_norm)
-        if discovered_relevant:
-            terms["discover"] = R_DISCOVER_RELEVANT * discovered_relevant
-        if verified_stale:
-            terms["verify"] = R_VERIFY_STALE * verified_stale
-
         failed_inspection = action in (INSPECT_FRONTIER, LOOK_AROUND) and (
             new_area < self.cfg.failed_area_cells
         )
-        if (
-            is_move
-            and not collided
-            and new_area < self.cfg.failed_area_cells
-            and not discovered_relevant
-        ):
-            terms["move_cost"] = R_UNNECESSARY_MOVE
-        if failed_inspection and self._prev_failed_inspect:
-            terms["repeat_failed"] = R_REPEAT_FAILED
+        terms = reward_terms(
+            self.cfg,
+            new_area=new_area,
+            discovered_relevant=discovered_relevant,
+            verified_stale=verified_stale,
+            collided=collided,
+            is_move=is_move,
+            failed_inspection=failed_inspection,
+            prev_failed=self._prev_failed_inspect,
+        )
         self._prev_failed_inspect = failed_inspection
 
         reward = float(sum(terms.values()))
