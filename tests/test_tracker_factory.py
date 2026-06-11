@@ -42,3 +42,21 @@ def test_bytetrack_backend_builds_adapter_when_available(monkeypatch) -> None:
     cfg = TrackingThresholds(backend="supervision_bytetrack")
     t = make_tracker(cfg)
     assert isinstance(t, ByteTrackTracker)
+
+
+def test_bytetrack_backend_falls_back_when_import_fails(monkeypatch) -> None:
+    import builtins
+
+    monkeypatch.delenv("PET_AGENT_TRACKER", raising=False)
+    real_import = builtins.__import__
+
+    def _no_supervision(name, *args, **kwargs):
+        if name == "supervision" or name.startswith("supervision."):
+            raise ImportError("simulated missing supervision")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_supervision)
+
+    cfg = TrackingThresholds(backend="supervision_bytetrack")
+    t = make_tracker(cfg)
+    assert isinstance(t, Tracker)  # graceful fallback, no raise
