@@ -741,6 +741,8 @@ couch / remotes / blanket / pillows).
     output; on schema failure, fall through to rules.
   - LLM never produces low-level motion. Output is structured
     `CommandIntent` only.
+  - **v3 upgrade:** local Ollama backend + multi-turn clarification +
+    LLM-assisted grounding — **§14.6.4**.
 - `planning/grounding_resolver.py`:
   - Score candidate targets:
     ```
@@ -958,6 +960,9 @@ if time-bound.
 - Acceptance:
   - Pose drift ≤ 5 cm over a 2-minute desk-top loop closure.
   - SemanticMap survives 360° camera rotation.
+- **v3 upgrade:** the shipped backbone is frame-to-frame ORB-VO (no loop
+  closure / global BA). The pip-only g2o-python graph-SLAM back-end (loop closure
+  + global BA on the existing ORB front-end) is specified in **§14.6.2**.
 
 ### 14.2 OpenScene Research Backend (course § VLM/LLM / 3D embodied)
 
@@ -967,7 +972,7 @@ if time-bound.
   exports a comparison table.
 - Acceptance: At least 5 queries succeed and visualize.
 
-### 14.3 RL-Based Exploration Policy (course § RL I/II) — **done**
+### 14.3 RL-Based Exploration Policy (course § RL I/II) — **done** (DQN; v3 adds continuous-control SAC/TQC, **§14.6.3**)
 
 - `research/rl_explorer.py` is a thin spec-named facade re-exporting the
   `src/research/rl/` package (`env.py`, `dqn.py`, `policy.py`).
@@ -1053,7 +1058,8 @@ sees a ROS type.
   synthetic 360° scan from the robot pose and fuses it into a process-wide
   metric map (grid extent mirrors the navigation grid), so the SLAM occupancy
   layer accretes as the scene is observed; serialised at `GET /slam/metric_map`.
-  **Still TODO:** swap ORB-VO (§14.1) for ORB-SLAM3 / Nav2 AMCL for drift-free
+  **Still TODO:** add the g2o-python graph-SLAM back-end (loop closure + global
+  BA, **§14.6.2**) on top of ORB-VO (§14.1) / Nav2 AMCL for drift-free
   *localisation* — the metric mapping half is done, the SLAM-grade pose half is
   not; and planner fusion of the metric layer is off by default so a partly
   observed map can't strand the demo.
@@ -1148,6 +1154,146 @@ frame-correct goal pose, and a synthetic `/cmd_vel` stream integrates to the
 expected world trajectory (CCW command ⇒ CCW yaw), all without a live ROS
 graph. Later stages are validated on hardware / simulation and are explicitly
 allowed to remain incomplete.
+
+### 14.6 Production-Fidelity Upgrades (v3 deepening track)
+
+Four subsystems currently ship as **lightweight stand-ins** that satisfy the
+contracts but not the depth: the tracker is greedy IoU + EMA velocity (a
+"Kalman stand-in", §4 / `tracking/tracker.py`), the SLAM pose source is
+frame-to-frame ORB-VO with no loop closure (§14.1), the exploration policy is a
+small DQN over 5 discrete macro-actions (§14.3), and the LLM only parses single
+utterances (`language/llm_parser.py`). v3 swaps each for a real, GPU-capable
+SOTA implementation **behind the protocol it already sits on**, with the
+lightweight version retained as the default fallback so the mainline demo never
+gates on a heavy dependency.
+
+**Cross-cutting rules.**
+
+- **Opt-in dependencies.** New heavy libs live in per-feature extras
+  (`pyproject.toml`): `.[track]`, `.[slam]`, `.[rl]`. Core install stays slim.
+- **Backend selection by env var** (existing convention): `PET_AGENT_TRACKER`,
+  `PET_AGENT_POSE_SOURCE`, `PET_AGENT_RL_ALGO`, `PET_AGENT_LLM_BACKEND` /
+  `PET_AGENT_LLM_GROUNDING`. Every default keeps the current behaviour.
+- **Lazy import + graceful fallback.** Heavy lib missing or fails to
+  load → log a warning and fall back to the stand-in (the defensive pattern
+  already in `llm_parser.py`). No hard import at module top level.
+- **Contracts unchanged.** No edit to `ObjectState`, `SceneGraph`,
+  `CommandIntent`, `NavigationGoal`, `PetAction`. Upgrades replace
+  implementations behind protocols only; `CommandIntent`/`NavigationGoal` gain
+  at most one optional field (`session_id`).
+- **`PET_AGENT_DEVICE=cuda`** routes every torch backend to the GPU.
+
+#### 14.6.1 ByteTrack — real Kalman + Hungarian
+
+- **Library:** `supervision` (`sv.ByteTrack`) — numpy + scipy, true 8-state
+  constant-velocity Kalman filter + Hungarian (`scipy.optimize.linear_sum_assignment`)
+  two-stage (high/low score) association. CPU; no VRAM cost.
+- **Adapter:** `tracking/bytetrack_adapter.py` implements the same call surface
+  as `Tracker` (`update(detections, frame_id) → tracks`). ByteTrack runs the 2D
+  image-plane association for ID assignment; the lifter's 3D centre is attached
+  to each surviving track afterwards, so SemanticMap (keyed by `track_id`) is
+  untouched. `sv` tracker ids map to stable `track_NNN`.
+- **Config:** `PET_AGENT_TRACKER ∈ {greedy, bytetrack}` (default `greedy`).
+- **Acceptance:** on a seeded multi-object occlusion sequence, ID switches ≤ the
+  greedy baseline and IDF1 does not regress.
+
+#### 14.6.2 Graph-SLAM — g2o pose-graph + loop closure (pip-only)
+
+- **Library:** `g2o-python` (PyPI wheel — `uv pip install g2o-python`, no native
+  build), the general graph optimizer ORB-SLAM itself uses. Reuse the existing
+  OpenCV ORB **front-end** (`research/slam_adapter.py::OrbVisualOdometry`) for
+  frame-to-frame odometry; add a g2o **back-end** that maintains a pose graph of
+  keyframes (vertices = `SE3`/`SE2` poses, edges = odometry + loop constraints)
+  and runs Levenberg-Marquardt optimization to produce a drift-corrected
+  trajectory.
+- **Why g2o-python over GTSAM:** both are pip-installable factor-graph
+  optimizers, but the stable `gtsam` 4.2.1 wheel pins **`numpy<2`** and would
+  downgrade this project's `numpy 2.1.3` → `1.26.4`, risking the `torch 2.12` /
+  `supervision` stack. `g2o-python` 0.0.12 installs cleanly **alongside numpy 2**
+  (verified via `uv pip install --dry-run`). GTSAM remains a documented
+  alternative for anyone willing to pin numpy<2 in an isolated env.
+- **Loop closure:** ORB **bag-of-words** appearance matching (OpenCV ORB
+  descriptors + a BoW vocabulary) detects revisited keyframes; a verified match
+  becomes a `BetweenFactor` constraint in the GTSAM graph. This is the piece the
+  shipped frame-to-frame VO lacks.
+- **Adapter:** `research/graph_slam_backend.py` sits behind the existing
+  `PoseSource` / `VisualOdometry` protocol (`track(frame)`, `get() → SE3` in the
+  graphics-world convention), so the object lifter consumes the optimized pose
+  transparently. Default fallback stays the raw ORB-VO.
+- **Why this over native ORB-SLAM3 or DROID-SLAM:** g2o-python is pip-installable
+  (no Pangolin/Eigen/DBoW2 compile) and **CPU-bound — zero VRAM**, which leaves
+  the full 12 GB GPU budget for the perception models + local LLM. DROID-SLAM
+  would need ~8 GB VRAM and collide with them; native ORB-SLAM3 needs a one-off
+  C++ build. The g2o back-end gives the same loop-closure + global-BA depth
+  through a one-line install.
+- **Config:** `PET_AGENT_POSE_SOURCE ∈ {fixed, sim, slam, graph_slam}`.
+- **Acceptance** (sharpens §14.1): pose drift ≤ 5 cm over a 2-minute desk-top
+  loop *with loop closure firing*; SemanticMap survives a 360° rotation.
+
+#### 14.6.3 SAC / TQC — continuous-control exploration
+
+- **Reformulation (the real depth, not just an algo swap).** SAC is SOTA for
+  **continuous** control; the current action space is 5 discrete macro-actions,
+  which standard SAC cannot consume. `research/rl/gym_env.py` wraps
+  `ExplorationEnv` as a Gymnasium `Env` exposing a **continuous** action — a
+  normalized next-viewpoint goal `(direction, magnitude)` on the local map —
+  which feeds the existing A* planner. The 5-dim normalized observation
+  (§14.3) is reused.
+- **Library:** `stable-baselines3` SAC (off-policy, entropy-regularized,
+  sample-efficient) as primary; `sb3-contrib` TQC (SAC + distributional critic,
+  current continuous-control SOTA) as the deeper variant. Tiny MLPs → trains in
+  minutes on the RTX 4070; the CPU env sim is the bottleneck, not the GPU.
+- **A/B:** the §14.3 harness extends to five policies on identical seeds —
+  heuristic / random / DQN (discrete legacy) / SAC / TQC. Discrete-vs-continuous
+  action spaces are not apples-to-apples, but the coverage metric is comparable.
+- **Config / CLI:** `--mode rl_exploration --algo {dqn,sac,tqc}`;
+  `PET_AGENT_RL_ALGO`.
+- **Acceptance:** SAC ≥ DQN on coverage over the seeded suite, or the result is
+  honestly reported as inconclusive (uplift < 10%); report becomes a 5-row table.
+
+#### 14.6.4 LLM — local Ollama + multi-turn clarification + grounding
+
+- **Local backend.** `language/llm_parser.py` gains a backend abstraction:
+  `PET_AGENT_LLM_BACKEND ∈ {anthropic, ollama}`. The Anthropic path keeps the
+  forced tool-use call; the **Ollama** path drives a local model (e.g.
+  `qwen2.5-coder:7b`, already pulled) through Ollama's JSON-schema `format`
+  parameter — more reliable than tool-calling for local models — and validates
+  the result through the same `CommandIntent` Pydantic gate. Config:
+  `PET_AGENT_OLLAMA_MODEL`, `PET_AGENT_OLLAMA_HOST`.
+- **Multi-turn clarification.** When grounding returns `clarification`, the LLM
+  generates a *discriminating* question instead of a canned string; the user's
+  reply (carrying an optional `session_id` on `/command`) is re-parsed with the
+  prior turn as context. The server holds a small per-session dialogue state.
+- **LLM-assisted grounding.** When the heuristic `GroundingResolver` is
+  low-confidence, the scene graph (objects + relations as JSON) + the utterance
+  go to the LLM, which picks the target and writes the justification into
+  `NavigationGoal.explanation`. Gated by `PET_AGENT_LLM_GROUNDING=on`.
+- **Acceptance:** an ambiguous command with two matching objects ("go to the
+  box") yields a discriminating question; the follow-up reply resolves
+  correctly; ≥ 5 scripted dialogues pass against the local model.
+
+#### 14.6.5 Hardware budget (this workstation: RTX 4070 12 GB, 16-core, 62 GB RAM)
+
+The GPU is the only scarce resource; CPU/RAM/disk are ample. Peak co-residency
+must fit 12 GB. Perception is 2 Hz and the LLM is event-driven, so they rarely
+peak together, but the budget is planned for the worst case.
+
+| Component | Device | Approx. VRAM | Notes |
+|---|---|---|---|
+| GroundingDINO (fp32) | CUDA | ~1.5–2 GB | fp32 mandated (§17.1) |
+| SAM / SAM 2 segmenter | CUDA | ~2.5 GB | MobileSAM/SAM2-small cuts this |
+| Depth Anything V2 | CUDA | ~1–1.5 GB | lazy-loaded, CPU fallback exists |
+| Ollama LLM (7B Q4) | CUDA | ~5–6 GB | event-driven; can offload to CPU |
+| ByteTrack | CPU | 0 | numpy/scipy |
+| Graph-SLAM (g2o-python) | CPU | 0 | pip-only, numpy-2 safe; **the reason to prefer it over DROID-SLAM** |
+| SAC/TQC nets | CUDA | < 0.5 GB | tiny MLPs; train offline |
+
+Perception (≈5 GB) + a 7B LLM (≈5–6 GB) is the tight pair. Mitigations already
+available: throttle perception (don't hold all three vision models resident —
+existing CLAUDE.md rule), use SAM2-small / MobileSAM, or run Ollama with partial
+CPU offload. DROID-SLAM is explicitly rejected on this budget; the g2o-python
+graph-SLAM back-end (§14.6.2) is CPU-only and pip-installable, which is what
+keeps the full stack co-resident.
 
 ---
 
