@@ -1196,6 +1196,16 @@ gates on a heavy dependency.
 - **Config:** `PET_AGENT_TRACKER ∈ {greedy, bytetrack}` (default `greedy`).
 - **Acceptance:** on a seeded multi-object occlusion sequence, ID switches ≤ the
   greedy baseline and IDF1 does not regress.
+- **Status — implemented:** `tracking/bytetrack_adapter.py` (`ByteTrackTracker`,
+  per-class `supervision.ByteTrack`: real 8-state Kalman + Hungarian, lazy
+  import, `minimum_matching_threshold = 1 − min_iou` cost-space mapping,
+  per-frame-pruned `active_tracks`). Selected via `make_tracker`
+  (`tracking/protocol.py`) from `thresholds.tracking.backend =
+  "supervision_bytetrack"` or `PET_AGENT_TRACKER=bytetrack`; greedy `Tracker`
+  stays the default fallback (incl. on missing `supervision`). Install with
+  `uv pip install -e ".[track]"`. Acceptance test
+  `tests/test_bytetrack_acceptance.py`: ByteTrack 0 ID switches vs greedy 0 on
+  the two-cup crossing (tied, criterion met).
 
 #### 14.6.2 Graph-SLAM — g2o pose-graph + loop closure (pip-only)
 
