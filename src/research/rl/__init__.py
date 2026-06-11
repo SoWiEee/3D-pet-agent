@@ -1,5 +1,6 @@
 """RL active-exploration package (spec §14.3)."""
 
+from .continuous_env import ContinuousEnvConfig, ContinuousExplorationEnv
 from .dqn import DQNAgent, DQNConfig, QNetwork, ReplayBuffer
 from .env import ACTION_NAMES, N_ACTIONS, STATE_DIM, EnvConfig, ExplorationEnv
 from .policy import (
@@ -14,6 +15,8 @@ from .policy import (
 )
 
 __all__ = [
+    "ContinuousExplorationEnv",
+    "ContinuousEnvConfig",
     "ExplorationEnv",
     "EnvConfig",
     "N_ACTIONS",
