@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -103,6 +104,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="--mode rl_exploration: training seed",
+    )
+    p.add_argument(
+        "--algo",
+        choices=["dqn", "sac", "tqc"],
+        default=os.environ.get("PET_AGENT_RL_ALGO", "dqn"),
+        help="--mode rl_exploration: exploration RL algorithm (default dqn)",
     )
     return p
 
@@ -312,11 +319,15 @@ def run_replay(args: argparse.Namespace, cfg: AppConfig) -> int:
     return run_eval(args, cfg)
 
 
-def run_rl_exploration(args: argparse.Namespace, cfg: AppConfig) -> int:  # noqa: ARG001
-    """Optional §14.3 — train a DQN exploration policy, A/B it against the
+def run_rl_exploration(args: argparse.Namespace, cfg: AppConfig) -> int:
+    """Optional §14.3 — train an exploration policy, A/B it against the
     heuristic + random baselines, and write a report. Returns non-zero only if
     the trained policy fails to beat *random* (a basic sanity gate; beating the
-    heuristic is allowed to be inconclusive per spec)."""
+    heuristic is allowed to be inconclusive per spec).
+
+    --algo dqn  (default): DQN discrete policy (original behavior, unchanged).
+    --algo sac|tqc: SB3 continuous SAC/TQC policy; DQN baseline included.
+    """
     import json
 
     import numpy as np
@@ -331,42 +342,97 @@ def run_rl_exploration(args: argparse.Namespace, cfg: AppConfig) -> int:  # noqa
         train_dqn,
     )
 
-    log.info("training DQN: episodes=%d seed=%d", args.episodes, args.seed)
-    agent, history = train_dqn(episodes=args.episodes, seed=args.seed)
-    log.info(
-        "training done: return first20=%.2f last20=%.2f",
-        float(np.mean(history[:20])),
-        float(np.mean(history[-20:])),
-    )
-
-    policies = {
-        "rl": RLExplorationPolicy(agent),
-        "heuristic": heuristic_policy,
-        "random": random_policy(np.random.default_rng(args.seed + 7)),
-    }
-    summary = evaluate_ab(policies, n_scenes=args.scenes, seed0=20_000)
-
-    out_dir = args.out / f"rl_exploration_{int(time.time())}"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    agent.save(str(out_dir / "model.pt"))
-    report = format_ab_report(summary, n_scenes=args.scenes, episodes=args.episodes)
-    (out_dir / "report.md").write_text(report, encoding="utf-8")
-    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    log.info("wrote model + report under %s", out_dir)
-    for name, m in summary.items():
+    if args.algo == "dqn":
+        log.info("training DQN: episodes=%d seed=%d", args.episodes, args.seed)
+        agent, history = train_dqn(episodes=args.episodes, seed=args.seed)
         log.info(
-            "  %-9s coverage=%.3f recall=%.2f return=%+.2f",
-            name,
-            m["mean_coverage"],
-            m["recall"],
-            m["mean_return"],
+            "training done: return first20=%.2f last20=%.2f",
+            float(np.mean(history[:20])),
+            float(np.mean(history[-20:])),
         )
-    log.info(
-        "coverage uplift RL vs heuristic: %+.1f%%",
-        100 * coverage_uplift(summary, "rl", "heuristic"),
-    )
-    # Sanity gate: a trained policy must at least beat random exploration.
-    return 0 if coverage_uplift(summary, "rl", "random") > 0 else 1
+
+        policies = {
+            "rl": RLExplorationPolicy(agent),
+            "heuristic": heuristic_policy,
+            "random": random_policy(np.random.default_rng(args.seed + 7)),
+        }
+        summary = evaluate_ab(policies, n_scenes=args.scenes, seed0=20_000)
+
+        out_dir = args.out / f"rl_exploration_{int(time.time())}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        agent.save(str(out_dir / "model.pt"))
+        report = format_ab_report(summary, n_scenes=args.scenes, episodes=args.episodes)
+        (out_dir / "report.md").write_text(report, encoding="utf-8")
+        (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        log.info("wrote model + report under %s", out_dir)
+        for name, m in summary.items():
+            log.info(
+                "  %-9s coverage=%.3f recall=%.2f return=%+.2f",
+                name,
+                m["mean_coverage"],
+                m["recall"],
+                m["mean_return"],
+            )
+        log.info(
+            "coverage uplift RL vs heuristic: %+.1f%%",
+            100 * coverage_uplift(summary, "rl", "heuristic"),
+        )
+        # Sanity gate: a trained policy must at least beat random exploration.
+        return 0 if coverage_uplift(summary, "rl", "random") > 0 else 1
+
+    else:  # sac or tqc
+        from .research.rl import evaluate_ab_mixed
+        from .research.rl.sb3_policies import Sb3ContinuousPolicy, train_sac, train_tqc
+
+        total_timesteps = max(2000, args.episodes * 200)
+        trainer = train_sac if args.algo == "sac" else train_tqc
+        device: str | None
+        try:
+            device = "cuda" if cfg.settings.device == "cuda" else None
+        except AttributeError:
+            device = None  # SB3 'auto'
+
+        log.info(
+            "training %s: total_timesteps=%d seed=%d device=%s",
+            args.algo.upper(),
+            total_timesteps,
+            args.seed,
+            device or "auto",
+        )
+        model = trainer(total_timesteps=total_timesteps, seed=args.seed, device=device)
+        log.info("training done; running DQN baseline for comparison")
+
+        dqn_agent, _ = train_dqn(episodes=args.episodes, seed=args.seed)
+        policies = {
+            args.algo: ("continuous", Sb3ContinuousPolicy(model)),
+            "dqn": ("discrete", RLExplorationPolicy(dqn_agent)),
+            "heuristic": ("discrete", heuristic_policy),
+            "random": ("discrete", random_policy(np.random.default_rng(args.seed + 7))),
+        }
+        summary = evaluate_ab_mixed(policies, n_scenes=args.scenes, seed0=20_000)
+
+        out_dir = args.out / f"rl_exploration_{int(time.time())}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        model.save(str(out_dir / f"{args.algo}_model"))  # writes .zip
+        report = format_ab_report(summary, n_scenes=args.scenes, episodes=args.episodes)
+        (out_dir / "report.md").write_text(report, encoding="utf-8")
+        (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        log.info("wrote model + report under %s", out_dir)
+        for name, m in summary.items():
+            log.info(
+                "  %-9s coverage=%.3f recall=%.2f return=%+.2f",
+                name,
+                m["mean_coverage"],
+                m["recall"],
+                m["mean_return"],
+            )
+        log.info(
+            "coverage uplift %s vs random: %+.1f%%",
+            args.algo,
+            100 * coverage_uplift(summary, args.algo, "random"),
+        )
+        # Sanity gate: chosen continuous policy must at least beat random.
+        return 0 if coverage_uplift(summary, args.algo, "random") > 0 else 1
 
 
 def run_ros_bridge(args: argparse.Namespace, cfg: AppConfig) -> int:  # noqa: ARG001
