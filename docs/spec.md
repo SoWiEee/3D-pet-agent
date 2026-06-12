@@ -1250,6 +1250,27 @@ gates on a heavy dependency.
   with `uv pip install -e ".[slam]"`.
 - **Acceptance** (sharpens §14.1): pose drift ≤ 5 cm over a 2-minute desk-top
   loop *with loop closure firing*; SemanticMap survives a 360° rotation.
+- **Status — implemented; loop closure verified on synthetic pose graphs.**
+  Module `research/graph_slam.py`: `PoseGraph` (anchored `pp.optim.LM`
+  Levenberg-Marquardt over `pp.Parameter(pp.SE3)` vertices, tangent-space
+  residuals `(meas.Inv() @ pred).Log()`, soft prior on node 0; numpy 4×4 SE3
+  in/out, round-trips at 0 error), `OrbBowLoopDetector` (ORB descriptors +
+  BFMatcher ratio-test appearance matching with a min-gap guard — same-image
+  ~343 matches vs ≤34 for distinct frames), and `GraphSlamPoseSource` behind the
+  `pose_source.py::PoseSource` protocol (`track`/`get`/`reset`, `source="slam"`,
+  non-loop path byte-identical to `SLAMPoseSource`'s `_t_wc` chaining; on a
+  detected loop it adds the edge, re-optimises, and refreshes the current pose
+  from the corrected node). Selector: `PET_AGENT_POSE_SOURCE=graph_slam` (lazy
+  import in `perception_loop._make_pose_source`); install `uv pip install -e
+  ".[slam]"`. Default fallback stays raw ORB-VO `SLAMPoseSource`. Measured
+  synthetic-loop acceptance (`tests/test_graph_slam_acceptance.py`, square loop,
+  5°/turn yaw bias): loop closure + LM cuts end-to-start drift **79.9%** (3.98 m
+  → 0.80 m). Honest scope: the loop-closure + global optimisation is implemented
+  and unit-verified on synthetic graphs; the residual 0.80 m is the
+  equal-weighted least-squares compromise (odometry vs loop constraint), not a
+  perfect closure. The live-camera 2-minute desk-loop drift ≤ 5 cm above is the
+  hardware-validation follow-up; a real ORB-SLAM3 / DROID-SLAM binding still
+  drops in behind the `VisualOdometry` protocol unchanged.
 
 #### 14.6.3 SAC / TQC — continuous-control exploration
 
