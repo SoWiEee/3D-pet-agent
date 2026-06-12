@@ -21,6 +21,7 @@ without limit on a long-lived server.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections import OrderedDict
@@ -147,23 +148,35 @@ def _templated_question(candidates: list[tuple[str, float]], semantic_map: Seman
     return f"Which {label} do you mean — {joined}?"
 
 
+_QUESTION_SYSTEM_PROMPT = (
+    "You help a 3D pet agent disambiguate a command. Several objects match what "
+    "the user said. Given the candidates (class, attributes, position), write ONE "
+    "short, natural question (max ~15 words) that asks the user which one they "
+    "mean, referring to each candidate's most distinguishing feature. Output only "
+    "the question text."
+)
+
+
 def discriminating_question(
     candidates: list[tuple[str, float]],
     semantic_map: SemanticMap,
     *,
-    llm_parser: object | None = None,
+    gen_client: object | None = None,
+    model: str | None = None,
 ) -> str:
     """Ask the user which candidate they meant.
 
-    Templated fallback is the default and is fully deterministic. If
-    ``llm_parser`` is provided and yields usable text we use it instead; any
-    LLM failure falls back to the template. This function NEVER raises.
+    The templated fallback is the default and is fully deterministic. When a
+    generative ``gen_client`` (an Ollama text client) is supplied and yields
+    usable prose, that LLM-authored question is used instead; any failure —
+    unreachable host, empty output — falls back to the template. This function
+    NEVER raises, so the default (hermetic) path always returns the template.
     """
     fallback = _templated_question(candidates, semantic_map)
-    if llm_parser is None:
+    if gen_client is None:
         return fallback
     try:
-        question = _llm_question(candidates, semantic_map, llm_parser, fallback)
+        question = _llm_question(candidates, semantic_map, gen_client, model)
     except Exception as e:  # noqa: BLE001 — LLM path must never break clarification
         log.warning("LLM discriminating-question failed (%s); using template", e)
         return fallback
@@ -173,21 +186,38 @@ def discriminating_question(
 def _llm_question(
     candidates: list[tuple[str, float]],
     semantic_map: SemanticMap,
-    llm_parser: object,
-    fallback: str,
-) -> str:
-    """Best-effort LLM-generated question. The available LLM seam is a command
-    *parser* (text → CommandIntent), not a free-text generator, so we have no
-    guaranteed natural-language channel. We therefore keep the deterministic
-    template as the source of truth and only let a parser confirm it's well
-    formed. This keeps the default suite hermetic while leaving a real hook for
-    a future generative backend."""
-    parse = getattr(llm_parser, "parse", None)
-    if not callable(parse):
-        return fallback
-    # The parser can't author prose; the template remains authoritative. A
-    # future generative client would replace this body.
-    return fallback
+    gen_client: object,
+    model: str | None,
+) -> str | None:
+    """LLM-authored disambiguating question via the local Ollama model. Returns
+    ``None`` on any failure so the caller uses the deterministic template."""
+    from .ollama_client import chat_text
+
+    if model is None:
+        try:
+            from ..config import Settings
+
+            model = Settings().ollama_model
+        except Exception:  # noqa: BLE001 — config must not block the question
+            return None
+
+    objs: list[dict[str, object]] = []
+    for tid, _ in candidates:
+        obj = semantic_map.get(tid)
+        if obj is None:
+            continue
+        objs.append(
+            {
+                "object_id": tid,
+                "class": obj.class_label,
+                "attributes": list(obj.attributes),
+                "position": [round(v, 2) for v in obj.center_3d_world],
+            }
+        )
+    if not objs:
+        return None
+    user = f"Candidates: {json.dumps(objs, ensure_ascii=False)}"
+    return chat_text(gen_client, model=model, system=_QUESTION_SYSTEM_PROMPT, user=user)
 
 
 # ── follow-up merge ─────────────────────────────────────────────────────────

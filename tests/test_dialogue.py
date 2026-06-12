@@ -151,6 +151,56 @@ def test_question_never_raises_on_missing_object() -> None:
     assert q  # non-empty fallback
 
 
+def _two_box_map() -> SemanticMap:
+    m = SemanticMap()
+    m.update(
+        [
+            make_object(
+                object_id="box_001",
+                class_label="box",
+                attributes=["red"],
+                center_3d_world=(-1.0, 0.0, -2.0),
+            ),
+            make_object(
+                object_id="box_002",
+                class_label="box",
+                attributes=["blue"],
+                center_3d_world=(1.0, 0.0, -2.0),
+            ),
+        ],
+        frame_id=0,
+    )
+    return m
+
+
+class _FakeGen:
+    def __init__(self, content: str | None, *, raises: bool = False) -> None:
+        self._content = content
+        self._raises = raises
+
+    def chat(self, **_kwargs: object) -> object:
+        if self._raises:
+            raise RuntimeError("ollama down")
+        return {"message": {"content": self._content}}
+
+
+def test_question_uses_generative_client_when_provided() -> None:
+    gen = _FakeGen("Did you mean the red box or the blue box?")
+    q = discriminating_question(
+        [("box_001", 0.6), ("box_002", 0.55)], _two_box_map(), gen_client=gen, model="m"
+    )
+    assert q == "Did you mean the red box or the blue box?"
+
+
+def test_question_falls_back_to_template_when_generative_fails() -> None:
+    gen = _FakeGen(None, raises=True)
+    q = discriminating_question(
+        [("box_001", 0.6), ("box_002", 0.55)], _two_box_map(), gen_client=gen, model="m"
+    )
+    # Deterministic template still answers (names the distinguishing attributes).
+    assert "red" in q.lower() and "blue" in q.lower()
+
+
 # ── merge_followup ──────────────────────────────────────────────────────────
 
 

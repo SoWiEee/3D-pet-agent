@@ -48,7 +48,6 @@ from ..exploration import (
 )
 from ..language import parse_command
 from ..language.dialogue import DialogueStore, discriminating_question, merge_followup
-from ..language.llm_parser import make_llm_parser
 from ..language.schema import CommandIntent
 from ..planning import (
     GROUNDING_WEIGHTS,
@@ -57,6 +56,7 @@ from ..planning import (
     Planner,
     PlannerConfig,
 )
+from ..planning.llm_grounding import llm_pick_target
 from ..research.manipulation import ArmConfig, plan_pick_and_place, top_down_grasp_goal
 from ..research.metric_map import MetricMapConfig, MetricOccupancyMap, simulate_scan
 from ..research.ros_bridge import Nav2Bridge, Nav2BridgeConfig, RecordingTransport
@@ -677,13 +677,47 @@ def _synthesize_pick(
 
 
 def _clarification_question(candidates: list[tuple[str, float]] | None) -> str:
-    """Discriminating question for a clarification turn. Uses the optional LLM
-    seam only when ``PET_AGENT_LLM_PARSER=on``; otherwise the deterministic
-    templated fallback. Never raises."""
+    """Discriminating question for a clarification turn. When ``PET_AGENT_LLM_PARSER=on``
+    a local Ollama text client authors the question; otherwise (or if Ollama is
+    unreachable) the deterministic templated fallback. Never raises."""
     cands = candidates or []
     use_llm = (os.environ.get("PET_AGENT_LLM_PARSER") or "").strip().lower() == "on"
-    llm = make_llm_parser() if use_llm else None
-    return discriminating_question(cands, semantic_map, llm_parser=llm)
+    gen_client = None
+    model = None
+    if use_llm:
+        from ..config import Settings
+        from ..language.ollama_client import get_client
+
+        s = Settings()
+        gen_client = get_client(s.ollama_host)
+        model = s.ollama_model
+    return discriminating_question(cands, semantic_map, gen_client=gen_client, model=model)
+
+
+def _try_llm_grounding(intent: CommandIntent, result: Any) -> Any | None:
+    """§14.6.4 — when ``PET_AGENT_LLM_GROUNDING=on`` and the heuristic resolver is
+    low-confidence (``clarification`` / ``no_match`` with candidates), let the local
+    model pick a target from the candidate set. Returns a ``success`` GroundingResult
+    (with the model's justification as the explanation) or ``None`` to keep the
+    heuristic result. Attempted BEFORE the clarification dialogue so a confident pick
+    short-circuits the question. Never raises."""
+    if (os.environ.get("PET_AGENT_LLM_GROUNDING") or "").strip().lower() != "on":
+        return None
+    if result.status not in {"clarification", "no_match"} or not result.candidates:
+        return None
+    try:
+        graph = scene_graph_builder.build(semantic_map)
+        pick = llm_pick_target(intent.raw_text, graph, result.candidates, semantic_map)
+    except Exception as e:  # noqa: BLE001 — grounding must never break /command
+        log.warning("LLM grounding raised (%s); keeping heuristic result", e)
+        return None
+    if pick is None:
+        return None
+    object_id, justification = pick
+    goal_result = grounding_resolver.build_goal_for_object(
+        intent, semantic_map, object_id, explanation=justification
+    )
+    return goal_result if goal_result.status == "success" else None
 
 
 def _handle_clarification_reply(
@@ -747,6 +781,15 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
         intent.intent_type,
         result.status,
     )
+
+    # §14.6.4: LLM-assisted grounding — a confident model pick on a low-confidence
+    # heuristic result short-circuits the clarification dialogue. Gated by
+    # PET_AGENT_LLM_GROUNDING=on; no-op otherwise.
+    llm_goal = _try_llm_grounding(intent, result)
+    if llm_goal is not None:
+        if req.session_id:
+            dialogue_store.resolve(req.session_id)
+        result = llm_goal
 
     if result.status == "clarification":
         # With a session_id we ask a discriminating question. The reply-handler

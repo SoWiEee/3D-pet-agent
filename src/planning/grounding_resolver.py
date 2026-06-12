@@ -219,6 +219,52 @@ class GroundingResolver:
             explanation=goal.explanation,
         )
 
+    def build_goal_for_object(
+        self,
+        intent: CommandIntent,
+        semantic_map: SemanticMap,
+        object_id: str,
+        *,
+        explanation: str | None = None,
+        score: float | None = None,
+    ) -> GroundingResult:
+        """Build a ``success`` GroundingResult for an explicitly chosen object.
+
+        Used by LLM-assisted grounding (§14.6.4): given a target the model
+        picked from the candidate set, reuse the same pose / constraint / goal
+        construction as :meth:`resolve`'s success path. ``explanation``, when
+        supplied (the model's justification), overrides the composed string so
+        the NavigationGoal stays explainable. An unknown ``object_id`` (e.g. the
+        object decayed out of the map) returns ``no_match``.
+        """
+        anchor = semantic_map.get(object_id)
+        if anchor is None:
+            return GroundingResult(
+                status="no_match",
+                explanation=f"Chosen object {object_id!r} is no longer in the map.",
+            )
+        objects = semantic_map.values()
+        target_xyz, explanation_parts = self._resolve_pose(
+            anchor, intent, intent.spatial_relation, objects
+        )
+        constraints = _project_constraints(intent, objects)
+        goal = NavigationGoal(
+            goal_id=f"goal_{uuid.uuid4().hex[:8]}",
+            goal_type="pose",
+            target_object_id=anchor.object_id,
+            target_position_world=tuple(target_xyz),
+            target_orientation_hint=(
+                "face_object" if intent.intent_type in {"look_at", "inspect"} else None
+            ),
+            constraints=constraints,
+            source_command=intent.raw_text,
+            explanation=explanation
+            or _compose_explanation(intent, anchor, explanation_parts, constraints),
+            score=score if score is not None else 1.0,
+            timestamp=time.time(),
+        )
+        return GroundingResult(status="success", goal=goal, explanation=goal.explanation)
+
     # ── scoring ─────────────────────────────────────────────────────────────
     def _score(
         self,
