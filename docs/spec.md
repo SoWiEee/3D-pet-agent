@@ -961,8 +961,8 @@ if time-bound.
   - Pose drift ≤ 5 cm over a 2-minute desk-top loop closure.
   - SemanticMap survives 360° camera rotation.
 - **v3 upgrade:** the shipped backbone is frame-to-frame ORB-VO (no loop
-  closure / global BA). The pip-only g2o-python graph-SLAM back-end (loop closure
-  + global BA on the existing ORB front-end) is specified in **§14.6.2**.
+  closure / global BA). The torch-native PyPose graph-SLAM back-end (loop closure
+  + global optimisation on the existing ORB front-end) is specified in **§14.6.2**.
 
 ### 14.2 OpenScene Research Backend (course § VLM/LLM / 3D embodied)
 
@@ -1058,8 +1058,8 @@ sees a ROS type.
   synthetic 360° scan from the robot pose and fuses it into a process-wide
   metric map (grid extent mirrors the navigation grid), so the SLAM occupancy
   layer accretes as the scene is observed; serialised at `GET /slam/metric_map`.
-  **Still TODO:** add the g2o-python graph-SLAM back-end (loop closure + global
-  BA, **§14.6.2**) on top of ORB-VO (§14.1) / Nav2 AMCL for drift-free
+  **Still TODO:** add the PyPose graph-SLAM back-end (loop closure + global
+  optimisation, **§14.6.2**) on top of ORB-VO (§14.1) / Nav2 AMCL for drift-free
   *localisation* — the metric mapping half is done, the SLAM-grade pose half is
   not; and planner fusion of the metric layer is off by default so a partly
   observed map can't strand the demo.
@@ -1213,36 +1213,41 @@ gates on a heavy dependency.
   `tests/test_bytetrack_acceptance.py`: ByteTrack 0 ID switches vs greedy 0 on
   the two-cup crossing (tied, criterion met).
 
-#### 14.6.2 Graph-SLAM — g2o pose-graph + loop closure (pip-only)
+#### 14.6.2 Graph-SLAM — PyPose pose-graph + loop closure (torch-native)
 
-- **Library:** `g2o-python` (PyPI wheel — `uv pip install g2o-python`, no native
-  build), the general graph optimizer ORB-SLAM itself uses. Reuse the existing
-  OpenCV ORB **front-end** (`research/slam_adapter.py::OrbVisualOdometry`) for
-  frame-to-frame odometry; add a g2o **back-end** that maintains a pose graph of
-  keyframes (vertices = `SE3`/`SE2` poses, edges = odometry + loop constraints)
-  and runs Levenberg-Marquardt optimization to produce a drift-corrected
-  trajectory.
-- **Why g2o-python over GTSAM:** both are pip-installable factor-graph
-  optimizers, but the stable `gtsam` 4.2.1 wheel pins **`numpy<2`** and would
-  downgrade this project's `numpy 2.1.3` → `1.26.4`, risking the `torch 2.12` /
-  `supervision` stack. `g2o-python` 0.0.12 installs cleanly **alongside numpy 2**
-  (verified via `uv pip install --dry-run`). GTSAM remains a documented
-  alternative for anyone willing to pin numpy<2 in an isolated env.
+- **Library:** `pypose` (PyPI wheel — `uv pip install pypose`, no native build,
+  rides the existing CUDA `torch`), a published robotics optimisation library
+  (ICRA — "PyPose: A Library for Robot Learning with Physics-based
+  Optimization"). Reuse the existing OpenCV ORB **front-end**
+  (`research/slam_adapter.py::OrbVisualOdometry`) for frame-to-frame odometry;
+  add a PyPose **back-end** that maintains a pose graph of keyframes (vertices =
+  `pp.Parameter(pp.SE3)` poses, edges = odometry + loop constraints with
+  tangent-space residuals) and runs `pp.optim.LM` (Levenberg-Marquardt) to
+  produce a drift-corrected trajectory. Verified end-to-end on this machine: a
+  4-node graph with a loop-closure edge optimises to residual 0 and satisfies
+  the loop constraint.
 - **Loop closure:** ORB **bag-of-words** appearance matching (OpenCV ORB
-  descriptors + a BoW vocabulary) detects revisited keyframes; a verified match
-  becomes a `BetweenFactor` constraint in the GTSAM graph. This is the piece the
-  shipped frame-to-frame VO lacks.
-- **Adapter:** `research/graph_slam_backend.py` sits behind the existing
-  `PoseSource` / `VisualOdometry` protocol (`track(frame)`, `get() → SE3` in the
-  graphics-world convention), so the object lifter consumes the optimized pose
-  transparently. Default fallback stays the raw ORB-VO.
-- **Why this over native ORB-SLAM3 or DROID-SLAM:** g2o-python is pip-installable
-  (no Pangolin/Eigen/DBoW2 compile) and **CPU-bound — zero VRAM**, which leaves
-  the full 12 GB GPU budget for the perception models + local LLM. DROID-SLAM
-  would need ~8 GB VRAM and collide with them; native ORB-SLAM3 needs a one-off
-  C++ build. The g2o back-end gives the same loop-closure + global-BA depth
-  through a one-line install.
-- **Config:** `PET_AGENT_POSE_SOURCE ∈ {fixed, sim, slam, graph_slam}`.
+  descriptors + a BoW / descriptor-distance vocabulary) detects revisited
+  keyframes; a verified match becomes a loop-closure edge whose VO relative pose
+  is the constraint, with a robust `pp.optim.kernel` (Huber) rejecting bad loops.
+  This is the piece the shipped frame-to-frame VO lacks.
+- **Adapter:** `research/graph_slam.py` provides a `GraphSlamPoseSource` behind
+  the existing `pose_source.py::PoseSource` protocol (`track(frame_id, image,
+  depth) → CameraPoseWorld`, `get() → CameraPoseWorld` in the graphics-world
+  convention), so the object lifter consumes the optimised pose transparently.
+  Default fallback stays the raw ORB-VO `SLAMPoseSource`.
+- **Why PyPose over g2o-python / GTSAM / ORB-SLAM3 (all tried on this machine):**
+  g2o-python has no wheels and its 0.0.12 sdist fails to build under CMake 3.28
+  (broken source tree — missing `logger.cpp`); GTSAM's wheel pins **`numpy<2`**
+  and would downgrade this project's numpy 2.1.3 → 1.26.4 (destabilising the
+  torch / supervision / SB3 stack), and isolating it in a separate venv breaks
+  the in-process pose-source contract; native ORB-SLAM3 needs a one-off C++
+  build. **PyPose installs as a single wheel, keeps numpy 2, runs in-process,
+  and is GPU-capable** on the same CUDA torch the perception stack uses — the
+  only option that ships the loop-closure + global-optimisation depth here
+  without a native build or a numpy conflict.
+- **Config:** `PET_AGENT_POSE_SOURCE ∈ {fixed, sim, slam, graph_slam}`; install
+  with `uv pip install -e ".[slam]"`.
 - **Acceptance** (sharpens §14.1): pose drift ≤ 5 cm over a 2-minute desk-top
   loop *with loop closure firing*; SemanticMap survives a 360° rotation.
 
@@ -1328,15 +1333,15 @@ peak together, but the budget is planned for the worst case.
 | Depth Anything V2 | CUDA | ~1–1.5 GB | lazy-loaded, CPU fallback exists |
 | Ollama LLM (7B Q4) | CUDA | ~5–6 GB | event-driven; can offload to CPU |
 | ByteTrack | CPU | 0 | numpy/scipy |
-| Graph-SLAM (g2o-python) | CPU | 0 | pip-only, numpy-2 safe; **the reason to prefer it over DROID-SLAM** |
+| Graph-SLAM (PyPose) | CPU/GPU | < 0.1 GB | torch-native wheel, numpy-2 safe; tiny pose graph, **far under DROID-SLAM's ~8 GB** |
 | SAC/TQC nets | CUDA | < 0.5 GB | tiny MLPs; train offline |
 
 Perception (≈5 GB) + a 7B LLM (≈5–6 GB) is the tight pair. Mitigations already
 available: throttle perception (don't hold all three vision models resident —
 existing CLAUDE.md rule), use SAM2-small / MobileSAM, or run Ollama with partial
-CPU offload. DROID-SLAM is explicitly rejected on this budget; the g2o-python
-graph-SLAM back-end (§14.6.2) is CPU-only and pip-installable, which is what
-keeps the full stack co-resident.
+CPU offload. DROID-SLAM is explicitly rejected on this budget; the PyPose
+graph-SLAM back-end (§14.6.2) is a tiny torch optimisation (negligible VRAM) on
+a single wheel, which is what keeps the full stack co-resident.
 
 ---
 
