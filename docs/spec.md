@@ -1340,6 +1340,36 @@ gates on a heavy dependency.
 - **Acceptance:** an ambiguous command with two matching objects ("go to the
   box") yields a discriminating question; the follow-up reply resolves
   correctly; ≥ 5 scripted dialogues pass against the local model.
+- **Status — implemented; hermetic acceptance 5/5 green.** Modules:
+  `language/llm_parser.py` (`OllamaCommandParser` — structured output via
+  `format=CommandIntent.model_json_schema()` + Pydantic gate — and
+  `make_llm_parser()` backend factory), `language/ollama_client.py` (shared
+  defensive `get_client`/`chat_json`/`chat_text`), `language/dialogue.py`
+  (`DialogueStore` per-session pending state, `merge_followup` re-grounding,
+  `discriminating_question` with Ollama-authored prose + templated fallback),
+  `planning/llm_grounding.py` (`llm_pick_target` over the scene graph +
+  candidates with a hallucination guard rejecting any id not in the candidate
+  set), and `GroundingResolver.build_goal_for_object` (reuses the success-path
+  goal construction, LLM justification → `NavigationGoal.explanation`). `/command`
+  gained `session_id`; `_try_llm_grounding` lets a confident model pick
+  short-circuit the clarification dialogue. Selectors: `PET_AGENT_LLM_PARSER=on`
+  + `PET_AGENT_LLM_BACKEND=ollama`, `PET_AGENT_LLM_GROUNDING=on`,
+  `PET_AGENT_OLLAMA_MODEL` / `PET_AGENT_OLLAMA_HOST`; install `uv pip install -e
+  ".[llm]"`. Acceptance: `tests/test_llm_dialogue_acceptance.py` drives the real
+  `/command` endpoint through 5 scripted dialogues — ambiguity → discriminating
+  question; follow-up "the red one" → correct target; LLM-assisted grounding
+  short-circuits an ambiguity; free-form Chinese the greedy rule parser
+  mishandles → clean structured intent from the Ollama backend; Ollama
+  unreachable → rule-parser fallback still answers — all hermetic (injected fake
+  clients, no GPU). **Every LLM path has a deterministic fallback** (rule parser
+  / templated question / heuristic resolver), so a missing package, unreachable
+  host, schema failure, or timeout never breaks `/command`; the default pytest
+  suite is fully hermetic and the live tests are opt-in (`@pytest.mark.live`,
+  skipping when Ollama is unreachable or the model can't load). The Ollama
+  backend was verified live end-to-end against `qwen2.5-coder:7b` earlier in
+  development; a full live re-run of the 5-dialogue mirror is pending GPU
+  availability (the workstation GPU is currently held by an unrelated training
+  job — `cudaMalloc … device busy` — which the live tests now skip on).
 
 #### 14.6.5 Hardware budget (this workstation: RTX 4070 12 GB, 16-core, 62 GB RAM)
 

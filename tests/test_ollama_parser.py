@@ -211,12 +211,32 @@ def _ollama_reachable(host: str) -> bool:
         return False
 
 
+def _model_serves(host: str, model: str) -> bool:
+    """True only if the model actually loads + generates. A busy GPU
+    (``cudaMalloc failed: device busy``) or a missing model returns False so the
+    live test SKIPS on infrastructure trouble rather than reporting a spurious
+    parser failure."""
+    try:
+        import ollama  # type: ignore[import-not-found]
+
+        ollama.Client(host=host).chat(
+            model=model,
+            messages=[{"role": "user", "content": "ok"}],
+            options={"num_predict": 1},
+        )
+        return True
+    except Exception:  # noqa: BLE001 — any infra error → skip
+        return False
+
+
 @pytest.mark.live
 def test_ollama_parser_live_end_to_end() -> None:
     pytest.importorskip("ollama")
     host = "http://localhost:11434"
     if not _ollama_reachable(host):
         pytest.skip("Ollama not reachable on localhost:11434")
+    if not _model_serves(host, "qwen2.5-coder:7b"):
+        pytest.skip("Ollama model could not load (GPU busy / model missing)")
 
     parser = OllamaCommandParser(model="qwen2.5-coder:7b", host=host)
     intent = parser.parse("go to the red cup")
