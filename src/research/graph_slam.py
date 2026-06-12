@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import cv2
 import numpy as np
 import pypose as pp
 import torch
@@ -27,7 +28,7 @@ import torch
 if TYPE_CHECKING:
     pass
 
-__all__ = ["PoseGraph"]
+__all__ = ["OrbBowLoopDetector", "PoseGraph"]
 
 _ANCHOR_WEIGHT: float = 100.0
 
@@ -174,3 +175,73 @@ class PoseGraph:
         if self._optimised is not None:
             return self._optimised[i].copy()
         return self._nodes[i].copy()
+
+
+# ---------------------------------------------------------------------------
+# ORB appearance-based loop detector
+# ---------------------------------------------------------------------------
+
+
+class OrbBowLoopDetector:
+    """Appearance-based loop detection over keyframe ORB descriptors.
+
+    A lightweight stand-in for a full DBoW vocabulary: ratio-test BF matching of
+    the current keyframe against stored keyframe descriptors; the best past
+    keyframe (older than ``min_gap``) with >= ``min_matches`` good matches is a
+    loop. Returns the matched keyframe id, else None.
+    """
+
+    def __init__(
+        self,
+        *,
+        n_features: int = 1000,
+        min_gap: int = 10,
+        min_matches: int = 30,
+        ratio: float = 0.75,
+    ) -> None:
+        self._orb = cv2.ORB_create(nfeatures=n_features)
+        self._bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+        self._min_gap = min_gap
+        self._min_matches = min_matches
+        self._ratio = ratio
+        self._kfs: list[tuple[int, np.ndarray | None]] = []
+
+    def add_keyframe(self, kf_id: int, gray: np.ndarray) -> int | None:
+        """Process a new keyframe image and return the best loop-closure match id.
+
+        Parameters
+        ----------
+        kf_id:
+            Monotonically increasing keyframe index.
+        gray:
+            Grayscale (H, W) or BGR (H, W, 3) uint8 image.
+
+        Returns
+        -------
+        int | None
+            The keyframe id of the best loop-closure candidate, or ``None``
+            when no past frame exceeds the match threshold.
+        """
+        if gray.ndim == 3:
+            gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
+        _, des = self._orb.detectAndCompute(gray, None)
+        best_id, best_n = None, self._min_matches - 1
+        if des is not None:
+            for past_id, past_des in self._kfs:
+                if kf_id - past_id < self._min_gap or past_des is None:
+                    continue
+                n = self._count_matches(past_des, des)
+                if n > best_n:
+                    best_id, best_n = past_id, n
+        self._kfs.append((kf_id, des))
+        return best_id
+
+    def _count_matches(self, d1: np.ndarray, d2: np.ndarray) -> int:
+        """Count ratio-test-passing BF matches between two descriptor arrays."""
+        if len(d1) < 2 or len(d2) < 2:
+            return 0
+        good = 0
+        for pair in self._bf.knnMatch(d1, d2, k=2):
+            if len(pair) == 2 and pair[0].distance < self._ratio * pair[1].distance:
+                good += 1
+        return good
