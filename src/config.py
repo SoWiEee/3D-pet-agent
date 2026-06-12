@@ -194,10 +194,12 @@ class Settings(BaseSettings):
     device: str = "cuda"
     camera_index: int = 0
     weights_dir: str = "weights"
-    # Pose source for the live perception loop. "slam" enables the optional
-    # ORB visual-odometry sidecar (spec §14.1); default "fixed" keeps the
-    # camera at the world origin. Override with PET_AGENT_POSE_SOURCE=slam.
-    pose_source: Literal["fixed", "sim", "slam"] = "fixed"
+    # Pose source for the live perception loop. "slam" enables the frame-to-frame
+    # ORB visual-odometry sidecar (spec §14.1); "graph_slam" adds a PyPose
+    # pose-graph back-end with ORB loop closure on top of the same VO front-end
+    # (spec §14.6.2); default "fixed" keeps the camera at the world origin.
+    # Override with PET_AGENT_POSE_SOURCE=graph_slam.
+    pose_source: Literal["fixed", "sim", "slam", "graph_slam"] = "fixed"
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:

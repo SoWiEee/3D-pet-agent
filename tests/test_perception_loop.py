@@ -209,3 +209,15 @@ def test_make_pose_source_selects_slam_when_configured(loop_with_broadcast) -> N
     loop.cfg.settings.pose_source = "slam"
     intr = CameraIntrinsics(fx=500.0, fy=500.0, cx=320.0, cy=240.0)
     assert isinstance(loop._make_pose_source(intr), SLAMPoseSource)
+
+
+def test_make_pose_source_selects_graph_slam_when_configured(
+    loop_with_broadcast,
+) -> None:
+    from src.research.graph_slam import GraphSlamPoseSource
+    from src.spatial.frame_packet import CameraIntrinsics
+
+    loop, _ = loop_with_broadcast
+    loop.cfg.settings.pose_source = "graph_slam"
+    intr = CameraIntrinsics(fx=500.0, fy=500.0, cx=320.0, cy=240.0)
+    assert isinstance(loop._make_pose_source(intr), GraphSlamPoseSource)

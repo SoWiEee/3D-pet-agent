@@ -168,6 +168,14 @@ class PerceptionLoop:
     def _make_pose_source(self, intrinsics: CameraIntrinsics) -> PoseSource:
         """Select the pose source from config. ``slam`` enables the ORB visual
         odometry sidecar; anything else keeps the fixed origin pose."""
+        if self.cfg.settings.pose_source == "graph_slam":
+            from ..research.graph_slam import GraphSlamPoseSource
+
+            log.info(
+                "perception loop using graph-SLAM pose source "
+                "(ORB VO + PyPose pose graph + loop closure)"
+            )
+            return GraphSlamPoseSource(intrinsics)
         if self.cfg.settings.pose_source == "slam":
             from ..research.slam_adapter import SLAMPoseSource
 
