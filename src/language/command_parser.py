@@ -320,13 +320,15 @@ _LLM_PARSER = None
 
 
 def _get_llm_parser():  # type: ignore[no-untyped-def]
-    """Cache one :class:`LLMCommandParser` instance — heavy SDK import lives
-    inside it, so we only pay the cost when LLM mode is actually used."""
+    """Cache one LLM parser instance — heavy SDK import lives inside it, so we
+    only pay the cost when LLM mode is actually used. The concrete backend
+    (Anthropic vs local Ollama) is chosen by ``make_llm_parser`` from
+    ``PET_AGENT_LLM_BACKEND`` (spec §14.6.4)."""
     global _LLM_PARSER
     if _LLM_PARSER is None:
-        from .llm_parser import LLMCommandParser
+        from .llm_parser import make_llm_parser
 
-        _LLM_PARSER = LLMCommandParser()
+        _LLM_PARSER = make_llm_parser()
     return _LLM_PARSER
 
 

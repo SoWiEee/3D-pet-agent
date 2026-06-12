@@ -201,6 +201,13 @@ class Settings(BaseSettings):
     # Override with PET_AGENT_POSE_SOURCE=graph_slam.
     pose_source: Literal["fixed", "sim", "slam", "graph_slam"] = "fixed"
 
+    # Local Ollama backend for the command parser (spec §14.6.4). Consulted only
+    # when PET_AGENT_LLM_PARSER=on and PET_AGENT_LLM_BACKEND=ollama; every failure
+    # path falls back to the rule parser. Override with PET_AGENT_OLLAMA_MODEL /
+    # PET_AGENT_OLLAMA_HOST.
+    ollama_model: str = "qwen2.5-coder:7b"
+    ollama_host: str = "http://localhost:11434"
+
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     with open(path, encoding="utf-8") as f:

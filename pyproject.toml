@@ -50,6 +50,9 @@ rl = [
 slam = [
     "pypose>=0.9",
 ]
+llm = [
+    "ollama>=0.4",
+]
 
 [tool.ruff]
 line-length = 100
@@ -62,6 +65,11 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Default suite stays hermetic: live tests (real Ollama) are opt-in via `-m live`.
+addopts = ["-m", "not live"]
+markers = [
+    "live: hits a real local service (e.g. Ollama); deselected by default, opt in with -m live",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

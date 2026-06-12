@@ -49,6 +49,21 @@ SYSTEM_PROMPT = (
     "still call the tool with intent_type='stop' and confidence=0.0."
 )
 
+# JSON-output variant for backends with native structured output (Ollama):
+# there is no tool to call, so the model emits the CommandIntent JSON directly.
+SYSTEM_PROMPT_JSON = (
+    "You are a strict command parser for a 3D pet agent. The user speaks "
+    "(in English or Traditional Chinese) about what the pet should do. "
+    "Convert each utterance into a single CommandIntent JSON object that "
+    "conforms to the provided schema. Respond with the JSON object only, no "
+    "prose. If the utterance is gibberish or not actionable, set "
+    "intent_type='stop' and confidence=0.0."
+)
+
+# Ollama backend defaults; overridable via PET_AGENT_OLLAMA_MODEL / _HOST.
+DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:7b"
+DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+
 
 def _command_intent_tool_schema() -> dict[str, Any]:
     """Build an Anthropic tool definition from the Pydantic CommandIntent
@@ -173,3 +188,142 @@ def _extract_tool_args(response: Any) -> dict[str, Any] | None:
         if isinstance(args, dict):
             return args
     return None
+
+
+# ── Ollama backend (local structured-output model) ─────────────────────────
+
+
+def _settings_ollama_defaults() -> tuple[str, str]:
+    """Read the Ollama model/host from pydantic ``Settings`` (env-backed).
+
+    Defensive: if config import or instantiation fails for any reason, fall
+    back to the module-level defaults so the parser is always constructible.
+    """
+    try:
+        from ..config import Settings
+
+        s = Settings()
+        return s.ollama_model, s.ollama_host
+    except Exception as e:  # noqa: BLE001 — config must never block construction
+        log.warning("Ollama settings load failed (%s); using defaults", e)
+        return DEFAULT_OLLAMA_MODEL, DEFAULT_OLLAMA_HOST
+
+
+class OllamaCommandParser:
+    """Local Ollama-backed parser using structured output (``format=schema``).
+
+    Mirrors :class:`LLMCommandParser`'s contract exactly: stateless, lazy SDK
+    import, ``client_factory`` injection for tests, ``parse → CommandIntent |
+    None`` with every exception swallowed so the rule parser can take over.
+    """
+
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        host: str | None = None,
+        timeout_s: float = DEFAULT_TIMEOUT_S,
+        client_factory: Callable[[], Any] | None = None,
+    ) -> None:
+        if model is None or host is None:
+            cfg_model, cfg_host = _settings_ollama_defaults()
+            model = model or cfg_model
+            host = host or cfg_host
+        self.model = model
+        self.host = host
+        self.timeout_s = timeout_s
+        self._client_factory = client_factory or self._default_client_factory
+        self._client: Any | None = None
+
+    # ── client bootstrap ──────────────────────────────────────────────────
+    def _default_client_factory(self) -> Any:
+        """Lazily import ollama. Raises ImportError if the package isn't
+        installed — the caller catches it and falls back to rules."""
+        import ollama  # type: ignore[import-not-found]
+
+        return ollama.Client(host=self.host)
+
+    def _client_or_none(self) -> Any | None:
+        if self._client is not None:
+            return self._client
+        try:
+            self._client = self._client_factory()
+        except Exception as e:  # noqa: BLE001
+            log.warning("Ollama client unavailable (%s); rule parser will run", e)
+            return None
+        return self._client
+
+    # ── public API ────────────────────────────────────────────────────────
+    def parse(self, text: str) -> CommandIntent | None:
+        client = self._client_or_none()
+        if client is None:
+            return None
+        t0 = time.perf_counter()
+        try:
+            response = client.chat(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT_JSON},
+                    {"role": "user", "content": text},
+                ],
+                format=CommandIntent.model_json_schema(),
+                options={"temperature": 0.0},
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning("Ollama call failed (%s); falling back to rules", e)
+            return None
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        log.info("Ollama parser: %.0fms model=%s", elapsed_ms, self.model)
+
+        content = _extract_content(response)
+        if not content:
+            log.warning("Ollama response had no content; falling back to rules")
+            return None
+        try:
+            data = json.loads(content)
+        except (json.JSONDecodeError, TypeError) as e:
+            log.warning("Ollama output was not valid JSON (%s); falling back", e)
+            return None
+        if not isinstance(data, dict):
+            log.warning("Ollama output was not a JSON object; falling back")
+            return None
+        # Force the original text in case the model rewrote or dropped it.
+        data["raw_text"] = text
+        try:
+            return CommandIntent(**data)
+        except Exception as e:  # noqa: BLE001 — schema mismatch is silent fallback
+            log.warning("Ollama output failed schema validation (%s); falling back", e)
+            return None
+
+
+def _extract_content(response: Any) -> str | None:
+    """Pull the message content string out of an Ollama chat response.
+
+    Handles both the mapping form (``resp["message"]["content"]``) and the
+    attribute form (``resp.message.content``) the official client exposes.
+    """
+    message = getattr(response, "message", None)
+    if message is None and isinstance(response, dict):
+        message = response.get("message")
+    if message is None:
+        return None
+    content = getattr(message, "content", None)
+    if content is None and isinstance(message, dict):
+        content = message.get("content")
+    if isinstance(content, str):
+        return content
+    return None
+
+
+def make_llm_parser() -> LLMCommandParser | OllamaCommandParser:
+    """Select the LLM parser backend from ``PET_AGENT_LLM_BACKEND``.
+
+    ``ollama`` → local :class:`OllamaCommandParser`; anything else (including
+    unset, ``anthropic``, or an unknown value) → the Anthropic
+    :class:`LLMCommandParser`. Construction never raises: a missing package or
+    unreachable host surfaces lazily in ``parse`` → ``None`` → rule fallback.
+    """
+    backend = (os.environ.get("PET_AGENT_LLM_BACKEND") or "anthropic").strip().lower()
+    if backend == "ollama":
+        return OllamaCommandParser()
+    return LLMCommandParser()
