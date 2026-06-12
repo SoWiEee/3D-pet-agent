@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 pytest.importorskip("cv2")
+pytest.importorskip("pypose")  # graph_slam.py imports pypose at module load
 from src.research.graph_slam import OrbBowLoopDetector  # noqa: E402
 
 

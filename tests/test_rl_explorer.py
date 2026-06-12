@@ -9,8 +9,15 @@ Three layers:
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
-from src.research.rl import (
+# src.research.rl/__init__ eagerly imports the continuous (gymnasium) + SB3
+# policies, so the whole package needs the .[rl] extra to import.
+pytest.importorskip("gymnasium")
+pytest.importorskip("stable_baselines3")
+pytest.importorskip("sb3_contrib")
+
+from src.research.rl import (  # noqa: E402
     ACTION_NAMES,
     N_ACTIONS,
     STATE_DIM,

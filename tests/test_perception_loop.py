@@ -214,6 +214,7 @@ def test_make_pose_source_selects_slam_when_configured(loop_with_broadcast) -> N
 def test_make_pose_source_selects_graph_slam_when_configured(
     loop_with_broadcast,
 ) -> None:
+    pytest.importorskip("pypose")  # graph_slam pose source needs the .[slam] extra
     from src.research.graph_slam import GraphSlamPoseSource
     from src.spatial.frame_packet import CameraIntrinsics
 

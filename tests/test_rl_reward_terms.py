@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from src.research.rl.env import (
+import pytest
+
+# env.py itself is dependency-light, but importing it runs src.research.rl/__init__,
+# which eagerly pulls the continuous (gymnasium) + SB3 policy modules.
+pytest.importorskip("gymnasium")
+pytest.importorskip("stable_baselines3")
+pytest.importorskip("sb3_contrib")
+
+from src.research.rl.env import (  # noqa: E402
     R_COLLISION,
     R_DISCOVER_RELEVANT,
     R_REDUCED_AREA,
