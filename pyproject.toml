@@ -47,6 +47,9 @@ rl = [
     "stable-baselines3>=2.7",
     "sb3-contrib>=2.7",
 ]
+slam = [
+    "pypose>=0.9",
+]
 
 [tool.ruff]
 line-length = 100
