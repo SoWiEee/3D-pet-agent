@@ -19,13 +19,17 @@ from .rl import (
     EnvConfig,
     ExplorationEnv,
     RLExplorationPolicy,
+    Sb3ContinuousPolicy,
     coverage_uplift,
     evaluate_ab,
     format_ab_report,
     heuristic_policy,
     random_policy,
+    run_continuous_episode,
     run_episode,
     train_dqn,
+    train_sac,
+    train_tqc,
 )
 
 __all__ = [
@@ -41,4 +45,8 @@ __all__ = [
     "evaluate_ab",
     "coverage_uplift",
     "format_ab_report",
+    "Sb3ContinuousPolicy",
+    "run_continuous_episode",
+    "train_sac",
+    "train_tqc",
 ]

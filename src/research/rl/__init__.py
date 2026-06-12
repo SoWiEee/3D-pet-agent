@@ -13,6 +13,7 @@ from .policy import (
     run_episode,
     train_dqn,
 )
+from .sb3_policies import Sb3ContinuousPolicy, run_continuous_episode, train_sac, train_tqc
 
 __all__ = [
     "ContinuousExplorationEnv",
@@ -34,4 +35,8 @@ __all__ = [
     "evaluate_ab",
     "coverage_uplift",
     "format_ab_report",
+    "Sb3ContinuousPolicy",
+    "run_continuous_episode",
+    "train_sac",
+    "train_tqc",
 ]
