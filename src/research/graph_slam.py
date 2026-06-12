@@ -17,6 +17,7 @@ Converter names used (verified against pypose 0.9.5):
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -24,11 +25,16 @@ import cv2
 import numpy as np
 import pypose as pp
 import torch
+from scipy.spatial.transform import Rotation
+
+from ..spatial.frame_packet import CameraIntrinsics, CameraPoseWorld
 
 if TYPE_CHECKING:
     pass
 
-__all__ = ["OrbBowLoopDetector", "PoseGraph"]
+__all__ = ["GraphSlamConfig", "GraphSlamPoseSource", "OrbBowLoopDetector", "PoseGraph"]
+
+log = logging.getLogger(__name__)
 
 _ANCHOR_WEIGHT: float = 100.0
 
@@ -245,3 +251,276 @@ class OrbBowLoopDetector:
             if len(pair) == 2 and pair[0].distance < self._ratio * pair[1].distance:
                 good += 1
         return good
+
+
+# ---------------------------------------------------------------------------
+# Graph-SLAM pose source
+# ---------------------------------------------------------------------------
+
+# Same axis-flip as slam_adapter._CV_TO_GRAPHICS: OpenCV cam (X right, Y down,
+# Z forward) → graphics world (X right, Y up, Z back).
+_CV_TO_GRAPHICS = np.diag([1.0, -1.0, -1.0])
+
+
+def _se3(rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
+    """Build a 4×4 homogeneous matrix from R (3×3) and t (3,)."""
+    t = np.eye(4, dtype=np.float64)
+    t[:3, :3] = rotation
+    t[:3, 3] = np.asarray(translation, dtype=np.float64).reshape(3)
+    return t
+
+
+def _se3_inv(t: np.ndarray) -> np.ndarray:
+    """Invert a 4×4 rigid-body transform without a general matrix inverse."""
+    r = t[:3, :3]
+    inv = np.eye(4, dtype=np.float64)
+    inv[:3, :3] = r.T
+    inv[:3, 3] = -r.T @ t[:3, 3]
+    return inv
+
+
+@dataclass
+class GraphSlamConfig:
+    """Tuning knobs for :class:`GraphSlamPoseSource`.
+
+    Attributes
+    ----------
+    keyframe_stride:
+        Add a new graph node every ``keyframe_stride`` successfully tracked
+        frames (default 1 — every frame).
+    min_inliers:
+        VO inlier threshold below which tracking is declared lost (same
+        semantic as ``SLAMPoseSource.min_inliers``).
+    optimize_every:
+        Run ``PoseGraph.optimize()`` every this many new keyframes.
+        ``1`` (default) optimises after each new node.
+    loop_min_matches:
+        Minimum feature matches to accept a loop-closure hypothesis.
+    loop_min_gap:
+        Minimum keyframe-index gap before a loop hypothesis is considered,
+        preventing false positives against very recent keyframes.
+    """
+
+    keyframe_stride: int = 1
+    min_inliers: int = 12
+    optimize_every: int = 1
+    loop_min_matches: int = 30
+    loop_min_gap: int = 10
+
+
+class GraphSlamPoseSource:
+    """ORB-VO front-end + pose-graph back-end with loop closure.
+
+    Mirrors :class:`~src.research.slam_adapter.SLAMPoseSource` exactly on the
+    non-loop path (identical ``_t_wc`` chaining), and additionally:
+
+    * Maintains a :class:`PoseGraph` — each successfully tracked frame
+      becomes a node; consecutive nodes are joined by an odometry edge.
+    * Runs :class:`OrbBowLoopDetector` on every new keyframe.  When a loop
+      is detected, a loop edge is added and the graph is optimised; the
+      current ``_t_wc`` is then refreshed from the latest optimised node so
+      subsequent VO chaining continues from the corrected pose.
+
+    Source string is ``"slam"`` (same as :class:`SLAMPoseSource`) so the
+    object lifter, tests, and downstream consumers that check ``.source``
+    need no change.
+
+    Parameters
+    ----------
+    intrinsics:
+        Camera intrinsic parameters (used to build the K matrix for VO).
+    vo:
+        Optional :class:`~src.research.slam_adapter.VisualOdometry` backend.
+        Defaults to a fresh :class:`OrbVisualOdometry`.
+    scale:
+        Monocular scale factor applied to VO translation (default 1.0).
+    config:
+        Algorithm hyper-parameters; see :class:`GraphSlamConfig`.
+    """
+
+    from src.research.slam_adapter import OrbVisualOdometry as _DefaultVO
+    from src.research.slam_adapter import VisualOdometry as _VOProtocol
+
+    def __init__(
+        self,
+        intrinsics: CameraIntrinsics,
+        *,
+        vo: object | None = None,
+        scale: float = 1.0,
+        config: GraphSlamConfig | None = None,
+    ) -> None:
+        # Lazily import to avoid circular-import issues at module load.
+        from src.research.slam_adapter import OrbVisualOdometry, VisualOdometry  # noqa: F401
+
+        self._k = np.array(
+            [
+                [intrinsics.fx, 0.0, intrinsics.cx],
+                [0.0, intrinsics.fy, intrinsics.cy],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        self._vo = vo if vo is not None else OrbVisualOdometry()
+        self._scale = float(scale)
+        self._cfg = config if config is not None else GraphSlamConfig()
+
+        # pose-graph back-end
+        self._graph = PoseGraph()
+        self._loop_detector = OrbBowLoopDetector(
+            min_gap=self._cfg.loop_min_gap,
+            min_matches=self._cfg.loop_min_matches,
+        )
+
+        # incremental keyframe counter (VO stride gate)
+        self._frames_since_kf: int = 0
+        # gray images stored per graph-node index for loop-closure re-estimation
+        self._kf_grays: list[np.ndarray] = []
+
+        self.reset()
+
+    # ------------------------------------------------------------------
+    # PoseSource interface
+    # ------------------------------------------------------------------
+
+    def reset(self) -> None:
+        """Reset to initial state — identical behaviour to SLAMPoseSource."""
+        self._t_wc = np.eye(4, dtype=np.float64)  # world←camera, OpenCV convention
+        self._prev_gray: np.ndarray | None = None
+        self._available = False
+        self._last_frame_id = -1
+        self._frames_since_kf = 0
+        # Re-create graph and loop detector so reset is a clean slate.
+        self._graph = PoseGraph()
+        self._loop_detector = OrbBowLoopDetector(
+            min_gap=self._cfg.loop_min_gap,
+            min_matches=self._cfg.loop_min_matches,
+        )
+        self._kf_grays = []
+
+    def track(
+        self,
+        frame_id: int,
+        image: np.ndarray,
+        depth: np.ndarray | None = None,
+        timestamp: float | None = None,  # noqa: ARG002 — interface symmetry
+    ) -> CameraPoseWorld:
+        """Ingest one frame, advance the pose, and optionally close a loop."""
+        gray = _to_gray(image)
+        self._last_frame_id = frame_id
+
+        # ── First frame: anchor world frame at camera origin ──────────────
+        if self._prev_gray is None:
+            self._prev_gray = gray
+            self._available = True
+            # Add the origin node (world←cam0 = I)
+            node_idx = self._graph.add_node(self._t_wc.copy())
+            self._kf_grays.append(gray.copy())
+            self._loop_detector.add_keyframe(node_idx, gray)
+            self._frames_since_kf = 0
+            return self._current_pose()
+
+        # ── Subsequent frames: run VO ─────────────────────────────────────
+        rel = self._vo.estimate(self._prev_gray, gray, self._k, prev_depth=depth)
+        if rel is None or rel.n_inliers < self._cfg.min_inliers:
+            self._available = False
+            log.debug("GraphSLAM tracking lost at frame %d", frame_id)
+            return self._current_pose()
+
+        # motion = T_{curr←prev} (VO convention, same as SLAMPoseSource)
+        motion = _se3(rel.rotation, rel.translation * self._scale)
+        # Compose: T_{world←curr} = T_{world←prev} @ T_{prev←curr}
+        self._t_wc = self._t_wc @ _se3_inv(motion)
+        self._prev_gray = gray
+        self._available = True
+        self._frames_since_kf += 1
+
+        # ── Keyframe + graph update (every keyframe_stride good frames) ───
+        if self._frames_since_kf >= self._cfg.keyframe_stride:
+            self._frames_since_kf = 0
+            self._add_keyframe_to_graph(gray)
+
+        return self._current_pose()
+
+    def get(
+        self,
+        frame_id: int | None = None,  # noqa: ARG002 — streaming, not indexed
+        timestamp: float | None = None,  # noqa: ARG002
+    ) -> CameraPoseWorld:
+        return self._current_pose()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _add_keyframe_to_graph(self, gray: np.ndarray) -> None:
+        """Add current pose as a new graph node, odometry edge, and check loops."""
+        prev_node_idx = self._graph.n_nodes - 1
+        curr_node_idx = self._graph.add_node(self._t_wc.copy())
+
+        # Odometry edge measurement: T_{curr|prev} = inv(world_from_prev) @ world_from_curr
+        world_from_prev = self._graph.pose(prev_node_idx)
+        world_from_curr = self._graph.pose(curr_node_idx)
+        meas = _se3_inv(world_from_prev) @ world_from_curr
+        self._graph.add_odometry_edge(prev_node_idx, curr_node_idx, meas)
+
+        # Store gray for potential loop-closure re-estimation
+        self._kf_grays.append(gray.copy())
+
+        # Loop detection
+        loop_match = self._loop_detector.add_keyframe(curr_node_idx, gray)
+        if loop_match is not None:
+            log.debug("GraphSLAM loop detected: node %d → node %d", loop_match, curr_node_idx)
+            self._close_loop(loop_match, curr_node_idx)
+
+        # Periodic graph optimisation
+        if curr_node_idx % self._cfg.optimize_every == 0:
+            self._graph.optimize()
+            # Refresh _t_wc from the optimised latest node so subsequent VO
+            # chaining continues from the corrected pose.
+            self._t_wc = self._graph.pose(curr_node_idx).copy()
+
+    def _close_loop(self, matched_node: int, curr_node: int) -> None:
+        """Add a loop-closure edge between two graph nodes.
+
+        The measurement is computed from current node estimates
+        (``inv(world_from_matched) @ world_from_curr``) — internally consistent
+        regardless of accumulated drift.  If the gray images for the matched
+        node are available, VO is attempted for a tighter measurement; on
+        failure the graph-estimate-based measurement is used as fallback.
+        """
+        world_from_matched = self._graph.pose(matched_node)
+        world_from_curr = self._graph.pose(curr_node)
+        meas = _se3_inv(world_from_matched) @ world_from_curr
+
+        # Optionally tighten with VO between stored keyframe grays
+        if matched_node < len(self._kf_grays) and curr_node < len(self._kf_grays):
+            matched_gray = self._kf_grays[matched_node]
+            curr_gray = self._kf_grays[curr_node]
+            loop_rel = self._vo.estimate(matched_gray, curr_gray, self._k)
+            if loop_rel is not None and loop_rel.n_inliers >= self._cfg.min_inliers:
+                loop_motion = _se3(loop_rel.rotation, loop_rel.translation * self._scale)
+                # loop_motion = T_{curr←matched} — same convention as odometry
+                meas = _se3_inv(loop_motion)
+
+        self._graph.add_loop_edge(matched_node, curr_node, meas)
+
+    def _current_pose(self) -> CameraPoseWorld:
+        """Convert internal ``_t_wc`` (OpenCV convention) to a CameraPoseWorld."""
+        r_wc = self._t_wc[:3, :3]
+        t_wc = self._t_wc[:3, 3]
+        r_pose = _CV_TO_GRAPHICS @ r_wc @ _CV_TO_GRAPHICS
+        pos = _CV_TO_GRAPHICS @ t_wc
+        quat = Rotation.from_matrix(r_pose).as_quat()  # (x, y, z, w)
+        return CameraPoseWorld(
+            available=self._available,
+            source="slam",
+            position=(float(pos[0]), float(pos[1]), float(pos[2])),
+            quaternion=(float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3])),
+        )
+
+
+def _to_gray(image: np.ndarray) -> np.ndarray:
+    """Convert BGR or grayscale image to grayscale."""
+    if image.ndim == 2:
+        return image
+    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
