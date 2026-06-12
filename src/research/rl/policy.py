@@ -124,6 +124,17 @@ def run_episode(env: ExplorationEnv, policy: Policy, seed: int) -> EpisodeResult
     )
 
 
+def _summarise_results(results: list[EpisodeResult]) -> dict[str, float]:
+    n = len(results)
+    return {
+        "mean_return": sum(r.total_return for r in results) / n,
+        "mean_coverage": sum(r.coverage for r in results) / n,
+        "mean_relevant_found": sum(r.relevant_found for r in results) / n,
+        "recall": _safe_recall(results),
+        "mean_steps": sum(r.steps for r in results) / n,
+    }
+
+
 def evaluate_ab(
     policies: dict[str, Policy],
     *,
@@ -140,23 +151,46 @@ def evaluate_ab(
         for s in seeds:
             raw[name].append(run_episode(env, policy, s))
 
-    summary: dict[str, dict[str, float]] = {}
-    for name, results in raw.items():
-        n = len(results)
-        summary[name] = {
-            "mean_return": sum(r.total_return for r in results) / n,
-            "mean_coverage": sum(r.coverage for r in results) / n,
-            "mean_relevant_found": sum(r.relevant_found for r in results) / n,
-            "recall": _safe_recall(results),
-            "mean_steps": sum(r.steps for r in results) / n,
-        }
-    return summary
+    return {name: _summarise_results(results) for name, results in raw.items()}
 
 
 def _safe_recall(results: list[EpisodeResult]) -> float:
     found = sum(r.relevant_found for r in results)
     total = sum(r.relevant_total for r in results)
     return found / total if total > 0 else 0.0
+
+
+def evaluate_ab_mixed(
+    policies: dict[str, tuple[str, object]],
+    *,
+    n_scenes: int = 50,
+    seed0: int = 10_000,
+    env_cfg: EnvConfig | None = None,
+) -> dict[str, dict[str, float]]:
+    """Score discrete and continuous policies on identical seeds.
+
+    ``policies[name] = (kind, callable)`` with ``kind in {"discrete", "continuous"}``.
+    Discrete callables run on ExplorationEnv via run_episode; continuous on
+    ContinuousExplorationEnv via run_continuous_episode; both at seeds seed0+i, so
+    the spawned world is identical and the coverage comparison is fair. Returns the
+    same metric dict as evaluate_ab (so format_ab_report / coverage_uplift work).
+    """
+    from .continuous_env import ContinuousExplorationEnv
+    from .sb3_policies import run_continuous_episode
+
+    seeds = [seed0 + i for i in range(n_scenes)]
+    summary: dict[str, dict[str, float]] = {}
+    for name, (kind, fn) in policies.items():
+        results: list[EpisodeResult] = []
+        for s in seeds:
+            if kind == "continuous":
+                results.append(run_continuous_episode(ContinuousExplorationEnv(env_cfg), fn, s))
+            elif kind == "discrete":
+                results.append(run_episode(ExplorationEnv(env_cfg), fn, s))
+            else:
+                raise ValueError(f"unknown policy kind {kind!r} for {name!r}")
+        summary[name] = _summarise_results(results)
+    return summary
 
 
 def coverage_uplift(summary: dict[str, dict[str, float]], rl: str, baseline: str) -> float:
