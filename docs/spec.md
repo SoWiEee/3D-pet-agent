@@ -1250,11 +1250,11 @@ gates on a heavy dependency.
 
 - **Reformulation (the real depth, not just an algo swap).** SAC is SOTA for
   **continuous** control; the current action space is 5 discrete macro-actions,
-  which standard SAC cannot consume. `research/rl/gym_env.py` wraps
+  which standard SAC cannot consume. `research/rl/continuous_env.py` wraps
   `ExplorationEnv` as a Gymnasium `Env` exposing a **continuous** action — a
   normalized next-viewpoint goal `(direction, magnitude)` on the local map —
-  which feeds the existing A* planner. The 5-dim normalized observation
-  (§14.3) is reused.
+  which is driven to via the env's obstacle-aware `_move_toward` slide. The
+  5-dim normalized observation (§14.3) is reused.
 - **Library:** `stable-baselines3` SAC (off-policy, entropy-regularized,
   sample-efficient) as primary; `sb3-contrib` TQC (SAC + distributional critic,
   current continuous-control SOTA) as the deeper variant. Tiny MLPs → trains in
@@ -1266,6 +1266,33 @@ gates on a heavy dependency.
   `PET_AGENT_RL_ALGO`.
 - **Acceptance:** SAC ≥ DQN on coverage over the seeded suite, or the result is
   honestly reported as inconclusive (uplift < 10%); report becomes a 5-row table.
+- **Status — implemented; result honestly inconclusive/negative at the tested
+  budget.** Modules: `continuous_env.py` (`ContinuousExplorationEnv`, Box(2)
+  waypoint composing the §14.3 world via a DRY-extracted `reward_terms`),
+  `sb3_policies.py` (`train_sac`/`train_tqc` on CUDA + `Sb3ContinuousPolicy` +
+  `run_continuous_episode`), `policy.py::evaluate_ab_mixed` (5-way matched-seed
+  A/B). Selector: `--mode rl_exploration --algo {dqn,sac,tqc}` /
+  `PET_AGENT_RL_ALGO`; install `uv pip install -e ".[rl]"`. Measured (40 scenes,
+  seed 0, 24k SB3 timesteps / 120 DQN episodes, RTX 4070):
+
+  | policy | mean coverage |
+  |---|---|
+  | heuristic | 0.383 |
+  | dqn | 0.370 |
+  | sac | 0.364 |
+  | random | 0.355 |
+  | tqc | 0.318 |
+
+  At this budget **neither SAC nor TQC beat DQN** (SAC ≈ DQN/random in a tight
+  0.36 band; TQC trails random). Reported honestly as inconclusive per the
+  acceptance clause — the continuous-control infrastructure is sound, but
+  off-policy continuous SAC/TQC need far more samples than 24k to learn useful
+  exploration on this small hand-crafted env, where the discrete macro-actions
+  (and even the heuristic) are already well-matched to the task. The discrete
+  DQN path (spec §14.3, **+37.9% over heuristic** there) remains the recommended
+  exploration policy; the continuous track stands as the SOTA-algorithm
+  comparison. A larger training budget is the obvious follow-up before any
+  re-judgement.
 
 #### 14.6.4 LLM — local Ollama + multi-turn clarification + grounding
 
