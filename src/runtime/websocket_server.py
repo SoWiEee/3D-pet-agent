@@ -47,6 +47,9 @@ from ..exploration import (
     ExplorationPlanner,
 )
 from ..language import parse_command
+from ..language.dialogue import DialogueStore, discriminating_question, merge_followup
+from ..language.llm_parser import make_llm_parser
+from ..language.schema import CommandIntent
 from ..planning import (
     GROUNDING_WEIGHTS,
     GridConfig,
@@ -74,6 +77,11 @@ tracker = make_tracker(load_thresholds().tracking)
 semantic_map = SemanticMap(map_id="live")
 scene_graph_builder = SceneGraphBuilder()
 grounding_resolver = GroundingResolver()
+# Task 2 (§14.6.4): per-session multi-turn clarification state. Bounded so a
+# long-lived server can't accumulate stale pending turns.
+dialogue_store = DialogueStore()
+# Cap re-asks of the same clarification so a stubborn reply can't loop forever.
+_CLARIFICATION_RETRY_CAP = 2
 
 _nav_cfg = load_navigation()
 planner = Planner(
@@ -629,6 +637,9 @@ class CommandRequest(BaseModel):
     # Mode so the move plans a Reeds-Shepp path (reverses to square up) instead
     # of the cat's unicycle pivot. Defaults to the cat's model.
     kinematics: Literal["unicycle", "car"] = "unicycle"
+    # Task 2 (§14.6.4): when present, a follow-up reply is folded into the prior
+    # turn's intent and re-grounded. Absent → today's single-shot behaviour.
+    session_id: str | None = None
 
 
 def _reasoning_fields(result: Any) -> dict[str, Any]:
@@ -665,6 +676,44 @@ def _synthesize_pick(
     return grasp.model_dump(), [a.model_dump() for a in actions]
 
 
+def _clarification_question(candidates: list[tuple[str, float]] | None) -> str:
+    """Discriminating question for a clarification turn. Uses the optional LLM
+    seam only when ``PET_AGENT_LLM_PARSER=on``; otherwise the deterministic
+    templated fallback. Never raises."""
+    cands = candidates or []
+    use_llm = (os.environ.get("PET_AGENT_LLM_PARSER") or "").strip().lower() == "on"
+    llm = make_llm_parser() if use_llm else None
+    return discriminating_question(cands, semantic_map, llm_parser=llm)
+
+
+def _handle_clarification_reply(
+    req: CommandRequest, session_id: str, pending: Any
+) -> tuple[CommandIntent, Any]:
+    """Fold a follow-up reply into the pending turn and re-ground.
+
+    Returns ``(intent, GroundingResult)``. On repeated ambiguity the pending
+    turn is re-opened (bounded by ``_CLARIFICATION_RETRY_CAP``); past the cap we
+    resolve the dialogue so it can't loop, and the normal status branches take
+    over (clarification / no_match / success)."""
+    intent = merge_followup(pending.intent, req.text)
+    graph = scene_graph_builder.build(semantic_map)
+    result = grounding_resolver.resolve(intent, semantic_map, graph)
+
+    if result.status == "success":
+        dialogue_store.resolve(session_id)
+        return intent, result
+
+    if result.status == "clarification" and pending.retries + 1 < _CLARIFICATION_RETRY_CAP:
+        question = _clarification_question(result.candidates)
+        dialogue_store.open_clarification(
+            session_id, intent, result.candidates or [], question, retries=pending.retries + 1
+        )
+    else:
+        # Cap reached, or a non-clarification outcome — stop tracking the turn.
+        dialogue_store.resolve(session_id)
+    return intent, result
+
+
 @app.post("/command")
 async def push_command(req: CommandRequest) -> dict[str, Any]:
     """Phase 6: parse a user utterance and ground it against the live map.
@@ -676,13 +725,22 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
     the goal we still emit the ``ask`` so the user gets the structured
     failure reason — no silent fallthrough.
     """
-    intent = parse_command(req.text)
-    if intent is None:
-        runtime.ask(f"I didn't catch that: {req.text!r}")
-        return {"parsed": False, "reason": "unparseable"}
+    # Task 2 (§14.6.4): a follow-up reply that carries a known session_id is
+    # folded into the prior turn's intent and re-grounded, rather than parsed
+    # cold. No session_id (or no pending turn) → today's single-shot path.
+    pending = dialogue_store.get(req.session_id) if req.session_id else None
+    is_reply = pending is not None and req.session_id is not None
+    if is_reply:
+        assert req.session_id is not None  # narrowed by is_reply
+        intent, result = _handle_clarification_reply(req, req.session_id, pending)
+    else:
+        intent = parse_command(req.text)
+        if intent is None:
+            runtime.ask(f"I didn't catch that: {req.text!r}")
+            return {"parsed": False, "reason": "unparseable"}
+        graph = scene_graph_builder.build(semantic_map)
+        result = grounding_resolver.resolve(intent, semantic_map, graph)
 
-    graph = scene_graph_builder.build(semantic_map)
-    result = grounding_resolver.resolve(intent, semantic_map, graph)
     log.info(
         "command: %r → intent=%s status=%s",
         req.text,
@@ -691,6 +749,28 @@ async def push_command(req: CommandRequest) -> dict[str, Any]:
     )
 
     if result.status == "clarification":
+        # With a session_id we ask a discriminating question. The reply-handler
+        # owns the pending-state lifecycle for follow-up turns (re-open while
+        # retries remain, else resolve); the fresh path opens the first turn.
+        if req.session_id is not None:
+            still_pending = dialogue_store.get(req.session_id)
+            if still_pending is not None:
+                question = still_pending.question
+            else:
+                question = _clarification_question(result.candidates)
+                if not is_reply:
+                    dialogue_store.open_clarification(
+                        req.session_id, intent, result.candidates or [], question
+                    )
+            runtime.ask(question)
+            return {
+                "parsed": True,
+                "intent": intent.model_dump(),
+                "status": result.status,
+                "candidates": result.candidates,
+                "question": question,
+                **_reasoning_fields(result),
+            }
         runtime.ask(result.explanation)
         return {
             "parsed": True,
