@@ -12,3 +12,5 @@ dist/
 .vscode/
 .idea/
 weights/
+.codegraph/
+.playwright-mcp/
